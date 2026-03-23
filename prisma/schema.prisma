@@ -1,0 +1,848 @@
+// First Valley — Production Database Schema
+// A persistent AI civilization platform
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// AUTH & USERS
+// ============================================================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  passwordHash  String?
+  role          UserRole  @default(GUEST)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts        Account[]
+  sessions        Session[]
+  subscription    Subscription?
+  tokenWallet     TokenWallet?
+  follows         Follow[]
+  userVotes       UserVote[]
+  interventions   Intervention[]
+  notifications   Notification[]
+  analyticsEvents AnalyticsEvent[]
+  auditLogs       AuditLog[]
+}
+
+enum UserRole {
+  GUEST
+  SUBSCRIBER
+  ADMIN
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============================================================
+// SUBSCRIPTIONS & BILLING
+// ============================================================
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String             @unique
+  stripeCustomerId     String             @unique
+  stripeSubscriptionId String?            @unique
+  stripePriceId        String?
+  status               SubscriptionStatus @default(INACTIVE)
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelAtPeriodEnd    Boolean            @default(false)
+  canceledAt           DateTime?
+  trialEnd             DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  billingEvents BillingEvent[]
+
+  @@index([stripeCustomerId])
+  @@index([stripeSubscriptionId])
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  TRIALING
+  PAST_DUE
+  CANCELED
+  INCOMPLETE
+  INACTIVE
+}
+
+model BillingEvent {
+  id             String   @id @default(cuid())
+  subscriptionId String
+  type           String
+  amount         Int?
+  currency       String   @default("usd")
+  stripeEventId  String?  @unique
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+}
+
+// ============================================================
+// TOKEN ECONOMY
+// ============================================================
+
+model TokenWallet {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  balance     Int      @default(0)
+  totalEarned Int      @default(0)
+  totalSpent  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions TokenTransaction[]
+}
+
+model TokenTransaction {
+  id              String          @id @default(cuid())
+  walletId        String
+  type            TransactionType
+  amount          Int
+  balanceBefore   Int
+  balanceAfter    Int
+  description     String
+  stripePaymentId String?
+  interventionId  String?
+  voteId          String?
+  metadata        Json?
+  createdAt       DateTime        @default(now())
+
+  wallet TokenWallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@index([walletId])
+  @@index([createdAt])
+}
+
+enum TransactionType {
+  PURCHASE
+  VOTE_SPEND
+  INTERVENTION_SPEND
+  BONUS
+  REFUND
+  ADMIN_GRANT
+}
+
+model TokenPack {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  tokens        Int
+  priceUsd      Int
+  bonusTokens   Int      @default(0)
+  badge         String?
+  active        Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  stripePriceId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ============================================================
+// WORLD
+// ============================================================
+
+model World {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  age         WorldAge @default(SURVIVAL)
+  tick        Int      @default(0)
+  worldTime   Float    @default(0)
+  paused      Boolean  @default(false)
+  seed        String   @default("")
+  config      Json     @default("{}")
+  startedAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  regions     Region[]
+  clans       Clan[]
+  beings      Being[]
+  events      WorldEvent[]
+  settlements Settlement[]
+  resources   ResourceNode[]
+  votes       Vote[]
+  snapshots   WorldSnapshot[]
+  recaps      Recap[]
+}
+
+enum WorldAge {
+  SURVIVAL
+  TRIBE_FORMATION
+  SETTLEMENT
+  EARLY_POLITICS
+  CIVILIZATION
+  EXPANSION
+  COLLAPSE
+  RENEWAL
+}
+
+model Region {
+  id          String     @id @default(cuid())
+  worldId     String
+  name        String
+  type        RegionType
+  description String?
+  biome       String
+  x           Float
+  y           Float
+  width       Float
+  height      Float
+  fertility   Float      @default(0.5)
+  waterAccess Float      @default(0.5)
+  elevation   Float      @default(0.3)
+  temperature Float      @default(0.5)
+  color       String     @default("#4a6a4a")
+  createdAt   DateTime   @default(now())
+
+  world       World        @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  settlements Settlement[]
+  beings      Being[]
+  resources   ResourceNode[]
+  clans       Clan[]
+
+  @@index([worldId])
+}
+
+enum RegionType {
+  RIVER_BASIN
+  MOUNTAINS
+  FOREST
+  COAST
+  PLAINS
+  VALLEY
+  DESERT
+  SWAMP
+}
+
+// ============================================================
+// CLANS
+// ============================================================
+
+model Clan {
+  id         String     @id @default(cuid())
+  worldId    String
+  regionId   String?
+  name       String
+  color      String     @default("#8b4513")
+  emblem     String?
+  culture    String?
+  population Int        @default(10)
+  status     ClanStatus @default(ACTIVE)
+  age        WorldAge   @default(SURVIVAL)
+  beliefs    Json       @default("[]")
+  traits     Json       @default("[]")
+  relations  Json       @default("{}")
+  resources  Json       @default("{}")
+  territory  Json       @default("[]")
+  x          Float      @default(0)
+  y          Float      @default(0)
+  power      Int        @default(10)
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  world       World        @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  region      Region?      @relation(fields: [regionId], references: [id])
+  beings      Being[]
+  settlements Settlement[]
+  follows     Follow[]
+  events      WorldEvent[]
+
+  @@index([worldId])
+}
+
+enum ClanStatus {
+  ACTIVE
+  AT_WAR
+  IN_ALLIANCE
+  COLLAPSED
+  MERGED
+  DOMINANT
+}
+
+// ============================================================
+// BEINGS (AI CHARACTERS)
+// ============================================================
+
+model Being {
+  id            String      @id @default(cuid())
+  worldId       String
+  clanId        String?
+  regionId      String?
+  name          String
+  age           Int         @default(20)
+  lifeStage     LifeStage   @default(YOUNG_ADULT)
+  role          String      @default("villager")
+  isCore        Boolean     @default(false)
+  status        BeingStatus @default(ALIVE)
+  x             Float       @default(0)
+  y             Float       @default(0)
+  bravery       Int         @default(50)
+  cunning       Int         @default(50)
+  empathy       Int         @default(50)
+  ambition      Int         @default(50)
+  wisdom        Int         @default(50)
+  charisma      Int         @default(50)
+  health        Int         @default(100)
+  hunger        Int         @default(100)
+  thirst        Int         @default(100)
+  fatigue       Int         @default(0)
+  happiness     Int         @default(60)
+  fear          Int         @default(20)
+  anger         Int         @default(10)
+  hope          Int         @default(60)
+  primaryGoal   String?
+  currentAction String?
+  drives        Json        @default("[]")
+  fears         Json        @default("[]")
+  beliefs       Json        @default("{}")
+  trustMap      Json        @default("{}")
+  relationships Json        @default("[]")
+  description   String?
+  backstory     String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  world    World        @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  clan     Clan?        @relation(fields: [clanId], references: [id])
+  region   Region?      @relation(fields: [regionId], references: [id])
+  memories Memory[]
+  follows  Follow[]
+  events   WorldEvent[]
+
+  @@index([worldId])
+  @@index([clanId])
+}
+
+enum LifeStage {
+  CHILD
+  YOUNG_ADULT
+  ADULT
+  ELDER
+}
+
+enum BeingStatus {
+  ALIVE
+  INJURED
+  SICK
+  DYING
+  DEAD
+  EXILED
+}
+
+model Memory {
+  id        String     @id @default(cuid())
+  beingId   String
+  type      MemoryType
+  content   String
+  emotion   String?
+  importance Int       @default(50)
+  tick      Int
+  worldTime Float
+  decayRate Float      @default(0.01)
+  permanent Boolean    @default(false)
+  createdAt DateTime   @default(now())
+
+  being Being @relation(fields: [beingId], references: [id], onDelete: Cascade)
+
+  @@index([beingId])
+  @@index([importance])
+}
+
+enum MemoryType {
+  SURVIVAL
+  SOCIAL
+  TRAUMA
+  ACHIEVEMENT
+  DISCOVERY
+  LOSS
+  BETRAYAL
+  JOY
+  SPIRITUAL
+  POLITICAL
+}
+
+// ============================================================
+// SETTLEMENTS & STRUCTURES
+// ============================================================
+
+model Settlement {
+  id         String         @id @default(cuid())
+  worldId    String
+  clanId     String?
+  regionId   String?
+  name       String
+  type       SettlementType @default(CAMP)
+  population Int            @default(5)
+  x          Float
+  y          Float
+  level      Int            @default(1)
+  health     Int            @default(100)
+  defense    Int            @default(10)
+  storage    Int            @default(100)
+  food       Int            @default(50)
+  water      Int            @default(50)
+  morale     Int            @default(70)
+  features   Json           @default("[]")
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
+
+  world      World       @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  clan       Clan?       @relation(fields: [clanId], references: [id])
+  region     Region?     @relation(fields: [regionId], references: [id])
+  structures Structure[]
+}
+
+enum SettlementType {
+  CAMP
+  HAMLET
+  VILLAGE
+  TOWN
+  CITY
+  FORTRESS
+  RUINS
+}
+
+model Structure {
+  id           String        @id @default(cuid())
+  settlementId String
+  type         StructureType
+  name         String?
+  level        Int           @default(1)
+  health       Int           @default(100)
+  x            Float
+  y            Float
+  createdAt    DateTime      @default(now())
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([settlementId])
+}
+
+enum StructureType {
+  HUT
+  LONGHOUSE
+  STOREHOUSE
+  SHRINE
+  WALL
+  GATE
+  WATCHTOWER
+  WELL
+  FIELD
+  FORGE
+  MARKET
+  PALACE
+  TEMPLE
+  MONUMENT
+  RUINS
+}
+
+model ResourceNode {
+  id        String       @id @default(cuid())
+  worldId   String
+  regionId  String?
+  type      ResourceType
+  amount    Float        @default(100)
+  maxAmount Float        @default(100)
+  regenRate Float        @default(0.1)
+  x         Float
+  y         Float
+  depleted  Boolean      @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  world  World   @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  region Region? @relation(fields: [regionId], references: [id])
+
+  @@index([worldId])
+}
+
+enum ResourceType {
+  FOOD
+  WATER
+  WOOD
+  STONE
+  MINERALS
+  HERBS
+  ANIMALS
+  FISH
+}
+
+// ============================================================
+// WORLD EVENTS
+// ============================================================
+
+model WorldEvent {
+  id          String        @id @default(cuid())
+  worldId     String
+  type        EventType
+  category    EventCategory @default(GENERAL)
+  title       String
+  description String
+  impact      String?
+  tick        Int
+  worldTime   Float
+  x           Float?
+  y           Float?
+  importance  Int           @default(50)
+  highlighted Boolean       @default(false)
+  clanId      String?
+  beingId     String?
+  metadata    Json          @default("{}")
+  createdAt   DateTime      @default(now())
+
+  world World  @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  clan  Clan?  @relation(fields: [clanId], references: [id])
+  being Being? @relation(fields: [beingId], references: [id])
+
+  @@index([worldId])
+  @@index([tick])
+  @@index([importance])
+  @@index([createdAt])
+}
+
+enum EventType {
+  BIRTH
+  DEATH
+  MARRIAGE
+  ALLIANCE
+  WAR_DECLARED
+  BATTLE
+  PEACE_TREATY
+  MIGRATION
+  FAMINE
+  FEAST
+  PLAGUE
+  NATURAL_DISASTER
+  DISCOVERY
+  INVENTION
+  RITUAL
+  ELECTION
+  BETRAYAL
+  ASSASSINATION
+  SETTLEMENT_FOUNDED
+  SETTLEMENT_DESTROYED
+  RELIGION_FOUNDED
+  MIRACLE
+  DROUGHT
+  FLOOD
+  FIRE
+  FIRST_CONTACT
+  TRADE_ROUTE
+  MONUMENT_BUILT
+  RULER_CHANGED
+  INTERVENTION
+  VIEWER_VOTE
+  ERA_TRANSITION
+  CUSTOM
+}
+
+enum EventCategory {
+  GENERAL
+  SURVIVAL
+  SOCIAL
+  POLITICAL
+  MILITARY
+  SPIRITUAL
+  NATURAL
+  CULTURAL
+  ECONOMIC
+  VIEWER
+}
+
+// ============================================================
+// VOTES & INTERVENTIONS
+// ============================================================
+
+model Vote {
+  id            String     @id @default(cuid())
+  worldId       String
+  title         String
+  description   String
+  options       Json
+  type          VoteType   @default(STANDARD)
+  status        VoteStatus @default(ACTIVE)
+  tokenCost     Int        @default(0)
+  endsAt        DateTime
+  result        String?
+  resultApplied Boolean    @default(false)
+  impact        String?
+  createdAt     DateTime   @default(now())
+  closedAt      DateTime?
+
+  world     World      @relation(fields: [worldId], references: [id], onDelete: Cascade)
+  userVotes UserVote[]
+
+  @@index([worldId])
+}
+
+enum VoteType {
+  STANDARD
+  PREMIUM
+  CLAN_FATE
+  CHARACTER_FATE
+  WORLD_EVENT
+}
+
+enum VoteStatus {
+  UPCOMING
+  ACTIVE
+  CLOSED
+  CANCELED
+}
+
+model UserVote {
+  id        String   @id @default(cuid())
+  userId    String
+  voteId    String
+  optionId  String
+  tokens    Int      @default(0)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vote Vote @relation(fields: [voteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, voteId])
+  @@index([voteId])
+}
+
+model Intervention {
+  id          String             @id @default(cuid())
+  userId      String
+  worldId     String
+  type        InterventionType
+  title       String
+  description String
+  tokenCost   Int
+  target      String?
+  effect      String?
+  applied     Boolean            @default(false)
+  appliedAt   DateTime?
+  status      InterventionStatus @default(PENDING)
+  createdAt   DateTime           @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([worldId])
+}
+
+enum InterventionType {
+  GIFT_FOOD
+  GIFT_WEAPONS
+  INSPIRE_BEING
+  CURSE_BEING
+  NATURAL_DISASTER
+  HEAL_PLAGUE
+  REVEAL_LOCATION
+  STRENGTHEN_CLAN
+  WEAKEN_CLAN
+  SUMMON_STRANGER
+  CUSTOM
+}
+
+enum InterventionStatus {
+  PENDING
+  APPLIED
+  REJECTED
+  EXPIRED
+}
+
+// ============================================================
+// FOLLOWS & NOTIFICATIONS
+// ============================================================
+
+model Follow {
+  id         String     @id @default(cuid())
+  userId     String
+  targetType FollowType
+  beingId    String?
+  clanId     String?
+  createdAt  DateTime   @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  being Being? @relation(fields: [beingId], references: [id])
+  clan  Clan?  @relation(fields: [clanId], references: [id])
+
+  @@index([userId])
+}
+
+enum FollowType {
+  BEING
+  CLAN
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  read      Boolean          @default(false)
+  metadata  Json             @default("{}")
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  FOLLOWED_BEING_EVENT
+  FOLLOWED_CLAN_EVENT
+  WORLD_MILESTONE
+  VOTE_STARTING
+  VOTE_RESULT
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_EXPIRING
+  TOKENS_CREDITED
+  SYSTEM
+}
+
+// ============================================================
+// RECAPS & SNAPSHOTS
+// ============================================================
+
+model Recap {
+  id         String    @id @default(cuid())
+  worldId    String
+  type       RecapType
+  title      String
+  content    String
+  summary    String
+  highlights Json      @default("[]")
+  tickStart  Int
+  tickEnd    Int
+  createdAt  DateTime  @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId])
+  @@index([createdAt])
+}
+
+enum RecapType {
+  DAILY
+  WEEKLY
+  ERA
+  SINCE_LAST_VISIT
+  MILESTONE
+}
+
+model WorldSnapshot {
+  id         String   @id @default(cuid())
+  worldId    String
+  tick       Int
+  worldTime  Float
+  worldAge   WorldAge
+  population Int
+  clansActive Int
+  majorEvents Json    @default("[]")
+  state      Json
+  createdAt  DateTime @default(now())
+
+  world World @relation(fields: [worldId], references: [id], onDelete: Cascade)
+
+  @@index([worldId, tick])
+}
+
+// ============================================================
+// ANALYTICS & ADMIN
+// ============================================================
+
+model AnalyticsEvent {
+  id         String   @id @default(cuid())
+  userId     String?
+  sessionId  String?
+  event      String
+  properties Json     @default("{}")
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([event])
+  @@index([createdAt])
+  @@index([userId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  resource   String
+  resourceId String?
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model AdminConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  category  String   @default("general")
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+}
