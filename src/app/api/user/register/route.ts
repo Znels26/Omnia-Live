@@ -59,8 +59,9 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ userId: user.id }, { status: 201 });
   } catch (error) {
     console.error("[Register]", error);
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "Failed to create account. Please try again." },
+      { error: message },
       { status: 500 }
     );
   }
