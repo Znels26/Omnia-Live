@@ -2,13 +2,14 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { FollowButton } from "@/components/world/FollowButton";
 import Link from "next/link";
 
 export default async function CharactersPage() {
   const session = await auth();
 
   const world = await db.world.findFirst({ where: { slug: "first-valley" } });
+  const userId = session?.user?.id;
   if (!world) {
     return <div className="p-8 text-fv-text-muted">World not found.</div>;
   }
@@ -19,6 +20,14 @@ export default async function CharactersPage() {
     orderBy: [{ isCore: "desc" }, { charisma: "desc" }],
     take: 60,
   });
+
+  const follows = userId
+    ? await db.follow.findMany({
+        where: { userId, targetType: "BEING" },
+        select: { beingId: true },
+      })
+    : [];
+  const followedBeingIds = new Set(follows.map((f) => f.beingId));
 
   const core = beings.filter((b) => b.isCore);
   const background = beings.filter((b) => !b.isCore);
@@ -39,7 +48,7 @@ export default async function CharactersPage() {
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {core.map((being) => (
-            <BeingCard key={being.id} being={being} isCore />
+            <BeingCard key={being.id} being={being} isCore isFollowing={followedBeingIds.has(being.id)} />
           ))}
         </div>
       </section>
@@ -51,7 +60,7 @@ export default async function CharactersPage() {
         </h2>
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
           {background.map((being) => (
-            <BeingCard key={being.id} being={being} isCore={false} compact />
+            <BeingCard key={being.id} being={being} isCore={false} compact isFollowing={followedBeingIds.has(being.id)} />
           ))}
         </div>
       </section>
@@ -59,7 +68,7 @@ export default async function CharactersPage() {
   );
 }
 
-function BeingCard({ being, isCore, compact = false }: {
+function BeingCard({ being, isCore, compact = false, isFollowing = false }: {
   being: {
     id: string;
     name: string;
@@ -83,6 +92,7 @@ function BeingCard({ being, isCore, compact = false }: {
   };
   isCore: boolean;
   compact?: boolean;
+  isFollowing?: boolean;
 }) {
   const statusColors: Record<string, string> = {
     ALIVE: "success",
@@ -182,9 +192,14 @@ function BeingCard({ being, isCore, compact = false }: {
         <div className="text-xs text-fv-ember italic mb-3">{being.currentAction}</div>
       )}
 
-      <Button variant="outline" size="sm" className="w-full">
-        Follow {being.name}
-      </Button>
+      <FollowButton
+        targetType="BEING"
+        targetId={being.id}
+        targetName={being.name}
+        initialFollowing={isFollowing}
+        size="sm"
+        className="w-full"
+      />
     </Card>
   );
 }

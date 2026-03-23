@@ -1,12 +1,23 @@
+import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FollowButton } from "@/components/world/FollowButton";
 import { formatWorldAge } from "@/lib/utils";
 
 export default async function ClansPage() {
+  const session = await auth();
   const world = await db.world.findFirst({ where: { slug: "first-valley" } });
   if (!world) return <div className="p-8 text-fv-text-muted">World not found.</div>;
+
+  const follows = session?.user?.id
+    ? await db.follow.findMany({
+        where: { userId: session.user.id, targetType: "CLAN" },
+        select: { clanId: true },
+      })
+    : [];
+  const followedClanIds = new Set(follows.map((f) => f.clanId));
 
   const clans = await db.clan.findMany({
     where: { worldId: world.id },
@@ -129,7 +140,13 @@ export default async function ClansPage() {
                 )}
 
                 <div className="flex gap-3">
-                  <Button variant="outline" size="sm">Follow Clan</Button>
+                  <FollowButton
+                    targetType="CLAN"
+                    targetId={clan.id}
+                    targetName={clan.name}
+                    initialFollowing={followedClanIds.has(clan.id)}
+                    size="sm"
+                  />
                   <Button variant="token" size="sm">Support ⚡</Button>
                 </div>
               </div>

@@ -530,8 +530,38 @@ function VoteCard({
     status: string;
   };
 }) {
-  const [voted, setVoted] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [voted, setVoted] = useState(false);
+  const [loading, setLoading] = useState(false);
   const totalVotes = vote.options.reduce((s, o) => s + o.votes, 0);
+
+  async function castVote() {
+    if (!selected || voted) return;
+    setLoading(true);
+    try {
+      const res = await fetch("/api/votes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voteId: vote.id, optionId: selected }),
+      });
+      if (res.ok) setVoted(true);
+    } catch (error) {
+      console.error("Vote error:", error);
+    }
+    setLoading(false);
+  }
+
+  if (voted) {
+    return (
+      <div className="fv-card p-3">
+        <div className="font-medium text-fv-text text-sm mb-2">{vote.title}</div>
+        <div className="bg-green-900/20 border border-green-800/40 rounded p-3 text-center">
+          <div className="text-green-400 text-xs font-medium">✓ Vote cast</div>
+          <div className="text-xs text-fv-text-dim mt-0.5">The valley has received your guidance.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fv-card p-3">
@@ -548,20 +578,20 @@ function VoteCard({
       <div className="space-y-2">
         {vote.options.map((option) => {
           const pct = totalVotes > 0 ? Math.round((option.votes / totalVotes) * 100) : 0;
-          const isVoted = voted === option.id;
+          const isSelected = selected === option.id;
 
           return (
             <button
               key={option.id}
-              onClick={() => setVoted(option.id)}
+              onClick={() => setSelected(option.id)}
               className={`w-full p-2 rounded border text-left transition-all text-xs ${
-                isVoted
+                isSelected
                   ? "border-fv-ember bg-fv-ember/10"
                   : "border-fv-border hover:border-fv-border-bright hover:bg-fv-card"
               }`}
             >
               <div className="flex items-center justify-between mb-1">
-                <span className={isVoted ? "text-fv-ember font-medium" : "text-fv-text"}>
+                <span className={isSelected ? "text-fv-ember font-medium" : "text-fv-text"}>
                   {option.label}
                 </span>
                 <span className="text-fv-text-dim">{pct}%</span>
@@ -571,7 +601,7 @@ function VoteCard({
                   className="stat-bar-fill"
                   style={{
                     width: `${pct}%`,
-                    backgroundColor: isVoted ? "var(--fv-ember)" : "var(--fv-border-bright)",
+                    backgroundColor: isSelected ? "var(--fv-ember)" : "var(--fv-border-bright)",
                   }}
                 />
               </div>
@@ -580,9 +610,15 @@ function VoteCard({
         })}
       </div>
 
-      {voted && (
-        <Button variant="primary" size="sm" className="w-full mt-3">
-          Confirm Vote
+      {selected && (
+        <Button
+          variant="primary"
+          size="sm"
+          className="w-full mt-3"
+          loading={loading}
+          onClick={castVote}
+        >
+          {vote.tokenCost > 0 ? `Cast Vote (⚡ ${vote.tokenCost})` : "Cast Vote"}
         </Button>
       )}
     </div>
