@@ -18,21 +18,74 @@ export default function WatchPage() {
   const [loading, setLoading] = useState(true);
   const [since, setSince] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
+  const tickRef = useRef<NodeJS.Timeout | null>(null);
+  const animRef = useRef<NodeJS.Timeout | null>(null);
+  const worldRef = useRef<WorldState | null>(null);
 
   useEffect(() => {
+    // Initial load
     loadWorldState();
-    // Poll for updates every 5 seconds
-    pollRef.current = setInterval(loadWorldState, 5000);
+
+    // Tick the simulation every 5 seconds (moves people, advances time, fires events)
+    tickRef.current = setInterval(runTick, 5000);
+
+    // Sync fresh state from DB every 10 seconds
+    pollRef.current = setInterval(loadWorldState, 10000);
+
+    // Client-side animation: interpolate being positions every 500ms for smooth movement
+    animRef.current = setInterval(animateBeings, 500);
+
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (tickRef.current) clearInterval(tickRef.current);
+      if (animRef.current) clearInterval(animRef.current);
     };
   }, []);
+
+  async function runTick() {
+    try {
+      await fetch("/api/world/tick", { method: "POST" });
+      // After tick, reload state to pick up DB changes
+      await loadWorldState();
+    } catch {
+      // Silent — tick failures shouldn't break the viewer
+    }
+  }
+
+  // Smoothly interpolate being positions client-side between server syncs
+  function animateBeings() {
+    const state = worldRef.current;
+    if (!state) return;
+
+    setWorldState(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        // Advance world clock smoothly (1 world-minute per animation frame ≈ fast enough to feel live)
+        worldTime: (prev.worldTime + 0.02) % 24,
+        beings: prev.beings.map(b => {
+          if (b.status === "DEAD") return b;
+          // Small jitter to make beings look like they're moving continuously
+          const jx = (Math.random() - 0.5) * 3;
+          const jy = (Math.random() - 0.5) * 3;
+          return {
+            ...b,
+            x: Math.max(10, Math.min(790, b.x + jx)),
+            y: Math.max(40, Math.min(520, b.y + jy)),
+          };
+        }),
+      };
+      worldRef.current = updated;
+      return updated;
+    });
+  }
 
   async function loadWorldState() {
     try {
       const res = await fetch("/api/world", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
+      worldRef.current = data.world;
       setWorldState(data.world);
       setEvents(data.events ?? []);
       setSince(data.sinceLastVisit);
