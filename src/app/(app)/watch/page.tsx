@@ -60,28 +60,26 @@ export default function WatchPage() {
   }
 
   return (
-    <div className="flex flex-col md:flex-row md:h-[calc(100vh-48px)] bg-fv-void overflow-hidden">
+    <div className="flex flex-col md:flex-row md:h-[calc(100vh-48px)] bg-fv-void md:overflow-hidden">
       {/* ── MAIN WORLD VIEWER ────────────────────────────────────────── */}
-      <div className="flex-1 relative flex flex-col" style={{ minHeight: "45vh" }}>
-        {/* World canvas */}
-        <div className="relative" style={{ height: "clamp(260px, 45vw, 100%)", flex: "1 1 auto" }}>
-          <WorldViewer
-            worldState={worldState}
-            selectedBeing={selectedBeing}
-            selectedClan={selectedClan}
-            onSelectBeing={setSelectedBeing}
-            onSelectClan={setSelectedClan}
-            className="w-full h-full"
-          />
-        </div>
+      {/* Mobile: aspect-[16/10] creates height from width (no gap).
+          Desktop: flex-1 fills the row; aspect-auto removes the constraint. */}
+      <div className="relative aspect-[16/10] md:aspect-auto md:flex-1">
+        {/* Canvas fills container absolutely on both mobile and desktop */}
+        <WorldViewer
+          worldState={worldState}
+          selectedBeing={selectedBeing}
+          selectedClan={selectedClan}
+          onSelectBeing={setSelectedBeing}
+          onSelectClan={setSelectedClan}
+          className="absolute inset-0 w-full h-full"
+        />
 
         {/* ── Since Last Visit Banner ── */}
         {since && (
-          <div className="absolute top-3 right-3 max-w-[200px] md:max-w-xs overlay-panel p-2.5 z-20 animate-fade-in">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-fv-gold text-xs font-display uppercase tracking-wider">
-                While You Were Away
-              </span>
+          <div className="absolute top-3 right-3 max-w-[180px] md:max-w-xs overlay-panel p-2.5 z-20 animate-fade-in">
+            <div className="text-fv-gold text-xs font-display uppercase tracking-wider mb-1">
+              While You Were Away
             </div>
             <p className="text-xs text-fv-text-muted leading-relaxed line-clamp-3">{since}</p>
           </div>
@@ -120,7 +118,7 @@ export default function WatchPage() {
       </div>
 
       {/* ── RIGHT / BOTTOM PANEL ─────────────────────────────────────── */}
-      <div className="md:w-[340px] w-full flex flex-col border-t md:border-t-0 md:border-l border-fv-border bg-fv-surface md:overflow-hidden flex-1 md:flex-none">
+      <div className="md:w-[340px] w-full flex flex-col border-t md:border-t-0 md:border-l border-fv-border bg-fv-surface md:overflow-hidden">
         {/* World status header */}
         <div className="px-4 py-3 border-b border-fv-border flex items-center justify-between flex-shrink-0">
           <div>

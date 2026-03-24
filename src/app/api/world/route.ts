@@ -147,22 +147,33 @@ export async function GET() {
     swamp: '#4a6a3a',
   }
 
-  const regions: SimRegion[] = ((world as any).world_regions ?? []).map((r: any) => ({
-    id: r.id,
-    worldId: world.id,
-    name: r.name,
-    type: (r.biome?.toUpperCase().replace(' ', '_') ?? 'VALLEY') as SimRegion['type'],
-    biome: r.biome ?? 'valley',
-    x: Number(r.position_x) || 400,
-    y: Number(r.position_y) || 300,
-    width: 150,
-    height: 120,
-    fertility: (r.fertility_level ?? 5) * 10,
-    waterAccess: (r.water_access ?? 5) * 10,
-    elevation: 100,
-    temperature: 20,
-    color: biomeColors[r.biome?.toLowerCase() ?? ''] ?? '#4a7c3f',
-  }))
+  const dbRegions = (world as any).world_regions ?? []
+  const regions: SimRegion[] = dbRegions.length > 0
+    ? dbRegions.map((r: any) => ({
+        id: r.id,
+        worldId: world.id,
+        name: r.name,
+        type: (r.biome?.toUpperCase().replace(' ', '_') ?? 'VALLEY') as SimRegion['type'],
+        biome: r.biome ?? 'valley',
+        x: Number(r.position_x) || 400,
+        y: Number(r.position_y) || 300,
+        width: 150,
+        height: 120,
+        fertility: (r.fertility_level ?? 5) * 10,
+        waterAccess: (r.water_access ?? 5) * 10,
+        elevation: 100,
+        temperature: 20,
+        color: biomeColors[r.biome?.toLowerCase() ?? ''] ?? '#4a7c3f',
+      }))
+    // No DB regions — generate default terrain for First Valley
+    : [
+        { id: 'r-valley',   worldId: world.id, name: 'The Valley Floor', type: 'VALLEY'      as const, biome: 'valley',      x: 400, y: 350, width: 310, height: 200, fertility: 75, waterAccess: 65, elevation: 100, temperature: 18, color: '#4a7c3f' },
+        { id: 'r-river',    worldId: world.id, name: 'River Basin',       type: 'RIVER_BASIN' as const, biome: 'river_basin', x: 420, y: 310, width: 180, height: 130, fertility: 80, waterAccess: 100, elevation: 50,  temperature: 18, color: '#3a7abf' },
+        { id: 'r-forest',   worldId: world.id, name: 'Forest of Ash',     type: 'FOREST'      as const, biome: 'forest',      x: 180, y: 380, width: 210, height: 160, fertility: 70, waterAccess: 60, elevation: 80,  temperature: 16, color: '#2d5a27' },
+        { id: 'r-mountain', worldId: world.id, name: 'Stone Heights',     type: 'MOUNTAINS'   as const, biome: 'mountains',   x: 360, y: 130, width: 170, height: 130, fertility: 20, waterAccess: 30, elevation: 400, temperature: 12, color: '#6a6a7a' },
+        { id: 'r-coast',    worldId: world.id, name: 'Tide Shore',        type: 'COAST'       as const, biome: 'coast',       x: 500, y: 490, width: 260, height: 90,  fertility: 60, waterAccess: 90, elevation: 20,  temperature: 20, color: '#2e8b8b' },
+        { id: 'r-plains',   worldId: world.id, name: 'Dry Plains',        type: 'PLAINS'      as const, biome: 'plains',      x: 620, y: 320, width: 190, height: 160, fertility: 55, waterAccess: 40, elevation: 120, temperature: 22, color: '#7a9a4a' },
+      ]
 
   // Get recent events and map to SimEvent
   const { data: rawEvents } = await supabase
