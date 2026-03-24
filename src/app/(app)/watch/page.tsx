@@ -60,11 +60,11 @@ export default function WatchPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-48px)] overflow-hidden bg-fv-void">
+    <div className="flex flex-col md:flex-row md:h-[calc(100vh-48px)] bg-fv-void overflow-hidden">
       {/* ── MAIN WORLD VIEWER ────────────────────────────────────────── */}
-      <div className="flex-1 relative flex flex-col">
-        {/* World canvas — the centerpiece */}
-        <div className="flex-1 relative">
+      <div className="flex-1 relative flex flex-col" style={{ minHeight: "45vh" }}>
+        {/* World canvas */}
+        <div className="relative" style={{ height: "clamp(260px, 45vw, 100%)", flex: "1 1 auto" }}>
           <WorldViewer
             worldState={worldState}
             selectedBeing={selectedBeing}
@@ -77,19 +77,19 @@ export default function WatchPage() {
 
         {/* ── Since Last Visit Banner ── */}
         {since && (
-          <div className="absolute top-3 right-3 max-w-xs overlay-panel p-3 z-20 animate-fade-in">
+          <div className="absolute top-3 right-3 max-w-[200px] md:max-w-xs overlay-panel p-2.5 z-20 animate-fade-in">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-fv-gold text-xs font-display uppercase tracking-wider">
                 While You Were Away
               </span>
             </div>
-            <p className="text-xs text-fv-text-muted leading-relaxed">{since}</p>
+            <p className="text-xs text-fv-text-muted leading-relaxed line-clamp-3">{since}</p>
           </div>
         )}
 
-        {/* ── Bottom Story Arc Bar ── */}
+        {/* ── Bottom Story Arc Bar (desktop only) ── */}
         {storyArc && (
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-fv-void to-transparent p-4 pt-12">
+          <div className="hidden md:block absolute bottom-0 left-0 right-0 bg-gradient-to-t from-fv-void to-transparent p-4 pt-12">
             <div
               className="overlay-panel p-4 flex items-start gap-4"
               style={{
@@ -111,8 +111,6 @@ export default function WatchPage() {
                   {storyArc.description}
                 </p>
               </div>
-
-              {/* Quick vote CTA */}
               <Button variant="token" size="sm" className="flex-shrink-0">
                 Vote ⚡
               </Button>
@@ -121,10 +119,10 @@ export default function WatchPage() {
         )}
       </div>
 
-      {/* ── RIGHT PANEL ──────────────────────────────────────────────── */}
-      <div className="w-[340px] flex flex-col border-l border-fv-border bg-fv-surface overflow-hidden">
+      {/* ── RIGHT / BOTTOM PANEL ─────────────────────────────────────── */}
+      <div className="md:w-[340px] w-full flex flex-col border-t md:border-t-0 md:border-l border-fv-border bg-fv-surface md:overflow-hidden flex-1 md:flex-none">
         {/* World status header */}
-        <div className="px-4 py-3 border-b border-fv-border flex items-center justify-between">
+        <div className="px-4 py-3 border-b border-fv-border flex items-center justify-between flex-shrink-0">
           <div>
             <div className="font-display text-fv-moon text-sm font-medium">
               {worldState?.name ?? "First Valley"}

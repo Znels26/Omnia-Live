@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { redirect } from 'next/navigation'
-import { Sidebar, TopBar } from '@/components/layout/Navigation'
+import { Sidebar, TopBar, MobileTopBar } from '@/components/layout/Navigation'
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient()
@@ -52,12 +52,19 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex min-h-screen bg-fv-base">
       <Sidebar />
-      <div className="flex-1 ml-[200px]">
+      <div className="flex-1 md:ml-[200px] ml-0">
+        {/* Desktop top bar */}
         <TopBar
           tokenBalance={wallet?.balance ?? 0}
           notificationCount={notifCount ?? 0}
         />
-        <main className="pt-12 min-h-screen">
+        {/* Mobile: token/notif overlay on the right of the mobile header */}
+        <MobileTopBar
+          tokenBalance={wallet?.balance ?? 0}
+          notificationCount={notifCount ?? 0}
+        />
+        {/* pt-12 on desktop (TopBar), pt-12 on mobile (mobile header), pb-16 on mobile (bottom nav) */}
+        <main className="pt-12 min-h-screen pb-16 md:pb-0">
           {children}
         </main>
       </div>
