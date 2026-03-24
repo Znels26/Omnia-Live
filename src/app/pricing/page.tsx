@@ -1,9 +1,63 @@
+"use client";
+
 import Link from "next/link";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { createClient } from "@/lib/supabase/client";
 
 export default function PricingPage() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => {
+      setIsLoggedIn(!!data.user);
+    });
+  }, []);
+
+  async function handleSubscribe() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/stripe/subscription", { method: "POST" });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        console.error("No checkout URL returned", data);
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error("Checkout error", err);
+      setLoading(false);
+    }
+  }
+
+  const SubscribeButton = ({ variant, size, className, label }: { variant: string; size?: string; className?: string; label: string }) => {
+    if (isLoggedIn) {
+      return (
+        <Button
+          variant={variant as any}
+          size={size as any}
+          className={className}
+          onClick={handleSubscribe}
+          disabled={loading}
+        >
+          {loading ? "Redirecting…" : label}
+        </Button>
+      );
+    }
+    return (
+      <Link href="/signup">
+        <Button variant={variant as any} size={size as any} className={className}>
+          {label}
+        </Button>
+      </Link>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-fv-base text-fv-text overflow-x-hidden">
       {/* Navigation */}
@@ -101,11 +155,7 @@ export default function PricingPage() {
                 </li>
               ))}
             </ul>
-            <Link href="/signup">
-              <Button variant="cinematic" className="w-full">
-                Start Watching — $10/month
-              </Button>
-            </Link>
+            <SubscribeButton variant="cinematic" className="w-full" label="Start Watching — $10/month" />
           </Card>
         </div>
       </section>
@@ -199,9 +249,7 @@ export default function PricingPage() {
             History is being made right now. Join for $10/month.
           </p>
           <div className="flex flex-col sm:flex-row gap-3 justify-center">
-            <Link href="/signup">
-              <Button variant="cinematic" size="xl">Start Watching — $10/month</Button>
-            </Link>
+            <SubscribeButton variant="cinematic" size="xl" label="Start Watching — $10/month" />
             <Link href="/how-it-works">
               <Button variant="outline" size="xl">How It Works</Button>
             </Link>
