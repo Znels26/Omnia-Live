@@ -11,17 +11,28 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   const admin = createAdminClient()
 
-  // Check subscription
-  const { data: subscription } = await admin
-    .from('subscriptions')
-    .select('status, current_period_end')
-    .eq('user_id', user.id)
+  // Check role first — admins bypass subscription requirement
+  const { data: profile } = await admin
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
     .single()
 
-  const isSubscribed = subscription?.status === 'active' || subscription?.status === 'trialing'
+  const isAdmin = profile?.role === 'admin'
 
-  if (!isSubscribed) {
-    redirect('/pricing?reason=subscription_required')
+  if (!isAdmin) {
+    const { data: subscription } = await admin
+      .from('subscriptions')
+      .select('status, current_period_end')
+      .eq('user_id', user.id)
+      .single()
+
+    const isSubscribed =
+      subscription?.status === 'active' || subscription?.status === 'trialing'
+
+    if (!isSubscribed) {
+      redirect('/pricing?reason=subscription_required')
+    }
   }
 
   // Get token balance

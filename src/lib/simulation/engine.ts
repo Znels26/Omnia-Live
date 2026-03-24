@@ -485,6 +485,542 @@ function generateWorldEvents(
 }
 
 // ---------------------------------------------------------------------------
+// Vote resolution — picks winner and applies effects for closed votes
+// ---------------------------------------------------------------------------
+
+async function resolveExpiredVotes(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  day: number,
+  year: number
+): Promise<PendingEvent[]> {
+  const events: PendingEvent[] = [];
+
+  // Find votes that are 'open' and past their closes_at time
+  const { data: closedVotes } = await db
+    .from("world_votes")
+    .select("*")
+    .eq("world_id", worldId)
+    .eq("status", "open")
+    .lte("closes_at", new Date().toISOString());
+
+  if (!closedVotes?.length) return events;
+
+  for (const vote of closedVotes) {
+    const { data: optionsData } = await db
+      .from("vote_options")
+      .select("id, title, votes_count, token_votes_count, effect_config")
+      .eq("vote_id", vote.id);
+
+    const options = (optionsData ?? []) as Array<{
+      id: string;
+      title: string;
+      votes_count: number;
+      token_votes_count: number;
+      effect_config: Record<string, unknown> | null;
+    }>;
+
+    if (!options.length) continue;
+
+    // Pick winner: highest (votes_count + token_votes_count), break ties randomly
+    const winner = options.reduce((best, opt) => {
+      const score = opt.votes_count + opt.token_votes_count;
+      const bestScore = best.votes_count + best.token_votes_count;
+      if (score > bestScore) return opt;
+      if (score === bestScore && Math.random() < 0.5) return opt;
+      return best;
+    });
+
+    // Apply the effect_config to the world
+    const effectEvents = await applyVoteEffect(db, worldId, winner.effect_config, day, year, vote.title, winner.title);
+    events.push(...effectEvents);
+
+    // Mark vote as resolved
+    await db
+      .from("world_votes")
+      .update({
+        status: "resolved",
+        winning_option_id: winner.id,
+        effect_applied: true,
+        resolved_at: new Date().toISOString(),
+      })
+      .eq("id", vote.id);
+
+    events.push({
+      world_id: worldId,
+      event_type: "CUSTOM",
+      title: `The people have spoken: ${winner.title}`,
+      description: `The vote on "${vote.title}" has concluded. The valley has chosen: ${winner.title}.`,
+      primary_person_id: null,
+      settlement_id: null,
+      significance_score: 70,
+      is_milestone: true,
+      is_featured: true,
+      in_game_day: day,
+      in_game_year: year,
+      metadata: { vote_id: vote.id, winning_option: winner.title },
+    });
+  }
+
+  return events;
+}
+
+// ---------------------------------------------------------------------------
+// Vote effect executor — interprets effect_config and modifies world state
+// ---------------------------------------------------------------------------
+
+async function applyVoteEffect(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  effectConfig: Record<string, unknown> | null,
+  day: number,
+  year: number,
+  voteTitle: string,
+  optionTitle: string
+): Promise<PendingEvent[]> {
+  const events: PendingEvent[] = [];
+  if (!effectConfig) return events;
+
+  const type = effectConfig.type as string;
+
+  if (type === "BOOST_CLAN") {
+    const clanId = effectConfig.target_id as string;
+    const amount = (effectConfig.amount as number) ?? 10;
+    const { data: clan } = await db.from("cultures").select("population_estimate, name").eq("id", clanId).single();
+    if (clan) {
+      const newPop = Math.max(0, (clan.population_estimate ?? 0) + amount);
+      await db.from("cultures").update({ population_estimate: newPop }).eq("id", clanId);
+      events.push({
+        world_id: worldId,
+        event_type: "CUSTOM",
+        title: `The ${clan.name} grow stronger`,
+        description: `Following the audience's choice, the ${clan.name} receive aid and grow in strength.`,
+        primary_person_id: null,
+        settlement_id: null,
+        significance_score: 55,
+        is_milestone: false,
+        is_featured: false,
+        in_game_day: day,
+        in_game_year: year,
+        metadata: { clan_id: clanId, population_change: amount },
+      });
+    }
+  }
+
+  if (type === "HEAL_PERSON") {
+    const personId = effectConfig.target_id as string;
+    const { data: person } = await db.from("persons").select("name").eq("id", personId).single();
+    if (person) {
+      await db
+        .from("persons")
+        .update({ health_score: 80, need_hunger: 20, need_fatigue: 20, need_stress: 20 })
+        .eq("id", personId);
+      events.push({
+        world_id: worldId,
+        event_type: "CUSTOM",
+        title: `${person.name} is restored`,
+        description: `The will of the audience reaches ${person.name}. They recover against all odds.`,
+        primary_person_id: personId,
+        settlement_id: null,
+        significance_score: 75,
+        is_milestone: false,
+        is_featured: true,
+        in_game_day: day,
+        in_game_year: year,
+        metadata: { effect: "heal", vote_title: voteTitle },
+      });
+    }
+  }
+
+  if (type === "END_WAR") {
+    // Remove hostile relations between all cultures in this world
+    const { data: cultures } = await db.from("cultures").select("id, metadata").eq("world_id", worldId);
+    if (cultures) {
+      for (const culture of cultures) {
+        const meta = (culture.metadata as Record<string, unknown>) ?? {};
+        const relations = (meta.relations as Record<string, string>) ?? {};
+        const updated = Object.fromEntries(
+          Object.entries(relations).map(([k, v]) => [k, v === "hostile" ? "neutral" : v])
+        );
+        await db.from("cultures").update({ metadata: { ...meta, relations: updated } }).eq("id", culture.id);
+      }
+    }
+    events.push({
+      world_id: worldId,
+      event_type: "CUSTOM",
+      title: "The audience demands peace",
+      description: "Heeding the will of those who watch, the warring clans lay down their arms.",
+      primary_person_id: null,
+      settlement_id: null,
+      significance_score: 85,
+      is_milestone: true,
+      is_featured: true,
+      in_game_day: day,
+      in_game_year: year,
+      metadata: { effect: "end_war" },
+    });
+  }
+
+  if (type === "START_WAR") {
+    const clanAId = effectConfig.clan_a as string;
+    const clanBId = effectConfig.clan_b as string;
+    if (clanAId && clanBId) {
+      for (const [myId, theirId] of [[clanAId, clanBId], [clanBId, clanAId]]) {
+        const { data: c } = await db.from("cultures").select("name, metadata").eq("id", myId).single();
+        if (c) {
+          const meta = (c.metadata as Record<string, unknown>) ?? {};
+          const relations = (meta.relations as Record<string, string>) ?? {};
+          relations[theirId] = "hostile";
+          await db.from("cultures").update({ metadata: { ...meta, relations } }).eq("id", myId);
+        }
+      }
+      const { data: clanA } = await db.from("cultures").select("name").eq("id", clanAId).single();
+      const { data: clanB } = await db.from("cultures").select("name").eq("id", clanBId).single();
+      events.push({
+        world_id: worldId,
+        event_type: "WAR_DECLARED",
+        title: `${clanA?.name ?? "A clan"} declares war on ${clanB?.name ?? "another clan"}`,
+        description: `The audience has ignited conflict. ${clanA?.name} raises arms against ${clanB?.name}.`,
+        primary_person_id: null,
+        settlement_id: null,
+        significance_score: 90,
+        is_milestone: true,
+        is_featured: true,
+        in_game_day: day,
+        in_game_year: year,
+        metadata: { clan_a: clanAId, clan_b: clanBId },
+      });
+    }
+  }
+
+  return events;
+}
+
+// ---------------------------------------------------------------------------
+// War simulation — check for hostile clans, run battles, resolve wars
+// ---------------------------------------------------------------------------
+
+async function tickClanRelations(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  day: number,
+  year: number
+): Promise<PendingEvent[]> {
+  const events: PendingEvent[] = [];
+
+  const { data: culturesData } = await db
+    .from("cultures")
+    .select("id, name, population_estimate, aggression_level, cooperation_level, metadata")
+    .eq("world_id", worldId);
+
+  if (!culturesData?.length) return events;
+
+  const cultures = culturesData as Array<{
+    id: string;
+    name: string;
+    population_estimate: number;
+    aggression_level: number;
+    cooperation_level: number;
+    metadata: Record<string, unknown> | null;
+  }>;
+
+  for (const culture of cultures) {
+    if (culture.population_estimate <= 0) continue;
+
+    const meta = (culture.metadata ?? {}) as Record<string, unknown>;
+    const relations = (meta.relations as Record<string, string>) ?? {};
+
+    // Check each hostile relation — run a battle tick
+    for (const [enemyId, relation] of Object.entries(relations)) {
+      if (relation !== "hostile") continue;
+
+      const enemy = cultures.find((c) => c.id === enemyId);
+      if (!enemy || enemy.population_estimate <= 0) {
+        // Enemy wiped out — war ends
+        relations[enemyId] = "neutral";
+        events.push({
+          world_id: worldId,
+          event_type: "CUSTOM",
+          title: `${culture.name} claims victory`,
+          description: `The ${culture.name} have crushed the ${enemy?.name ?? "enemy"} and emerged victorious from the conflict.`,
+          primary_person_id: null,
+          settlement_id: null,
+          significance_score: 90,
+          is_milestone: true,
+          is_featured: true,
+          in_game_day: day,
+          in_game_year: year,
+          metadata: { victor: culture.id, defeated: enemyId },
+        });
+        continue;
+      }
+
+      // Battle: both sides lose population each tick they're at war (only from the attacker's perspective to avoid double-processing)
+      if (culture.id < enemy.id) {
+        // Process this pair once (lower ID side runs the battle)
+        const attackerLoss = Math.floor(Math.random() * 3);
+        const defenderLoss = Math.floor(Math.random() * 3);
+        const newAttackerPop = Math.max(0, culture.population_estimate - attackerLoss);
+        const newDefenderPop = Math.max(0, enemy.population_estimate - defenderLoss);
+
+        await db.from("cultures").update({ population_estimate: newAttackerPop }).eq("id", culture.id);
+        await db.from("cultures").update({ population_estimate: newDefenderPop }).eq("id", enemy.id);
+
+        // Occasional visible battle event (not every tick — 20% chance)
+        if (Math.random() < 0.2) {
+          const attackerWins = attackerLoss < defenderLoss;
+          events.push({
+            world_id: worldId,
+            event_type: "BATTLE",
+            title: `${culture.name} and ${enemy.name} clash`,
+            description: attackerWins
+              ? `The ${culture.name} press their advantage against the ${enemy.name}. The ${enemy.name} suffer greater losses.`
+              : `The ${enemy.name} repel an assault by the ${culture.name}, inflicting heavy casualties.`,
+            primary_person_id: null,
+            settlement_id: null,
+            significance_score: 65,
+            is_milestone: false,
+            is_featured: false,
+            in_game_day: day,
+            in_game_year: year,
+            metadata: {
+              attacker: culture.id,
+              defender: enemy.id,
+              attacker_loss: attackerLoss,
+              defender_loss: defenderLoss,
+            },
+          });
+        }
+
+        // 2% chance per tick of peace breaking out
+        if (Math.random() < 0.02) {
+          relations[enemyId] = "neutral";
+          const enemyMeta = (enemy.metadata ?? {}) as Record<string, unknown>;
+          const enemyRelations = (enemyMeta.relations as Record<string, string>) ?? {};
+          enemyRelations[culture.id] = "neutral";
+          await db.from("cultures").update({ metadata: { ...enemyMeta, relations: enemyRelations } }).eq("id", enemy.id);
+
+          events.push({
+            world_id: worldId,
+            event_type: "CUSTOM",
+            title: `${culture.name} and ${enemy.name} agree to peace`,
+            description: `After bitter conflict, the ${culture.name} and ${enemy.name} lay down their arms. An uneasy peace settles over the valley.`,
+            primary_person_id: null,
+            settlement_id: null,
+            significance_score: 80,
+            is_milestone: true,
+            is_featured: true,
+            in_game_day: day,
+            in_game_year: year,
+            metadata: { clan_a: culture.id, clan_b: enemy.id },
+          });
+        }
+      }
+    }
+
+    // Update this culture's metadata if relations changed
+    await db.from("cultures").update({ metadata: { ...meta, relations } }).eq("id", culture.id);
+
+    // Chance of a new war breaking out between high-aggression cultures (1 per 50 days on average)
+    if (Math.random() < 0.02 && culture.aggression_level > 60) {
+      const target = cultures.find(
+        (c) =>
+          c.id !== culture.id &&
+          c.population_estimate > 5 &&
+          (relations[c.id] ?? "neutral") === "neutral"
+      );
+      if (target) {
+        const myMeta = (culture.metadata ?? {}) as Record<string, unknown>;
+        const myRelations = (myMeta.relations as Record<string, string>) ?? {};
+        myRelations[target.id] = "hostile";
+        await db.from("cultures").update({ metadata: { ...myMeta, relations: myRelations } }).eq("id", culture.id);
+
+        const targetMeta = (target.metadata ?? {}) as Record<string, unknown>;
+        const targetRelations = (targetMeta.relations as Record<string, string>) ?? {};
+        targetRelations[culture.id] = "hostile";
+        await db.from("cultures").update({ metadata: { ...targetMeta, relations: targetRelations } }).eq("id", target.id);
+
+        events.push({
+          world_id: worldId,
+          event_type: "WAR_DECLARED",
+          title: `${culture.name} declares war on ${target.name}`,
+          description: `Tensions that have simmered for seasons finally boil over. The ${culture.name} raise their banners against the ${target.name}.`,
+          primary_person_id: null,
+          settlement_id: null,
+          significance_score: 90,
+          is_milestone: true,
+          is_featured: true,
+          in_game_day: day,
+          in_game_year: year,
+          metadata: { aggressor: culture.id, target: target.id },
+        });
+      }
+    }
+  }
+
+  return events;
+}
+
+// ---------------------------------------------------------------------------
+// Vote auto-creation — creates a new vote every 7 in-game days if none open
+// ---------------------------------------------------------------------------
+
+async function maybeCreateVote(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  day: number,
+  year: number,
+  cycleNumber: number
+): Promise<void> {
+  // Only check every 7 days
+  if (day % 7 !== 0) return;
+
+  // Check if there's already an open or upcoming vote
+  const { data: existingVote } = await db
+    .from("world_votes")
+    .select("id")
+    .eq("world_id", worldId)
+    .in("status", ["open", "upcoming"])
+    .limit(1)
+    .single();
+
+  if (existingVote) return;
+
+  // Load world state to pick a contextual vote
+  const { data: cultures } = await db
+    .from("cultures")
+    .select("id, name, population_estimate, aggression_level, metadata")
+    .eq("world_id", worldId);
+
+  const { data: persons } = await db
+    .from("persons")
+    .select("id, name, is_featured, is_alive")
+    .eq("world_id", worldId)
+    .eq("is_alive", true)
+    .eq("is_featured", true)
+    .limit(5);
+
+  const cultureList = (cultures ?? []) as Array<{ id: string; name: string; population_estimate: number; aggression_level: number; metadata: Record<string, unknown> | null }>;
+  const featuredPersons = (persons ?? []) as Array<{ id: string; name: string; is_featured: boolean }>;
+
+  // Check for warring clans
+  const atWar = cultureList.filter((c) => {
+    const relations = ((c.metadata ?? {}) as Record<string, unknown>).relations as Record<string, string> | undefined;
+    return relations && Object.values(relations).some((r) => r === "hostile");
+  });
+
+  let voteData: {
+    title: string;
+    description: string;
+    vote_category: string;
+    options: Array<{ title: string; description: string; effect_summary: string; effect_config: Record<string, unknown> }>;
+  };
+
+  if (atWar.length > 0) {
+    voteData = {
+      title: "Should the audience intervene in the war?",
+      description: `Conflict rages in the valley. The ${atWar[0].name} and their enemies clash. The audience may shape the outcome.`,
+      vote_category: "INTERVENTION",
+      options: [
+        {
+          title: "Demand peace",
+          description: "The audience uses its influence to end the conflict immediately.",
+          effect_summary: "All wars in the valley end immediately.",
+          effect_config: { type: "END_WAR" },
+        },
+        {
+          title: "Let fate decide",
+          description: "The audience watches and does not interfere.",
+          effect_summary: "No effect — the war continues.",
+          effect_config: { type: "NO_OP" },
+        },
+      ],
+    };
+  } else if (featuredPersons.length > 0) {
+    const person = featuredPersons[Math.floor(Math.random() * featuredPersons.length)];
+    voteData = {
+      title: `Fate of ${person.name}`,
+      description: `${person.name} stands at a crossroads. The audience will decide their next chapter.`,
+      vote_category: "CHARACTER_FATE",
+      options: [
+        {
+          title: `Aid ${person.name}`,
+          description: `The audience blesses ${person.name} with good fortune.`,
+          effect_summary: `${person.name}'s health and wellbeing are restored.`,
+          effect_config: { type: "HEAL_PERSON", target_id: person.id },
+        },
+        {
+          title: "Leave them to fate",
+          description: "The audience observes without interfering.",
+          effect_summary: "No effect — fate runs its course.",
+          effect_config: { type: "NO_OP" },
+        },
+      ],
+    };
+  } else if (cultureList.length >= 2) {
+    const clan = cultureList[Math.floor(Math.random() * cultureList.length)];
+    voteData = {
+      title: `Should the ${clan.name} expand?`,
+      description: `The ${clan.name} are considering pushing into new territory. The audience may encourage or restrain them.`,
+      vote_category: "CLAN_FATE",
+      options: [
+        {
+          title: `Bless the ${clan.name}'s expansion`,
+          description: "The audience wills the clan forward, granting them strength.",
+          effect_summary: `The ${clan.name}'s population grows.`,
+          effect_config: { type: "BOOST_CLAN", target_id: clan.id, amount: 5 },
+        },
+        {
+          title: "Hold them back",
+          description: "The audience urges caution.",
+          effect_summary: "No expansion occurs.",
+          effect_config: { type: "NO_OP" },
+        },
+      ],
+    };
+  } else {
+    return; // not enough world state to make an interesting vote
+  }
+
+  const opensAt = new Date();
+  const closesAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours from now
+
+  // Create vote
+  const { data: newVote } = await db
+    .from("world_votes")
+    .insert({
+      world_id: worldId,
+      cycle_number: cycleNumber,
+      title: voteData.title,
+      description: voteData.description,
+      vote_category: voteData.vote_category,
+      status: "open",
+      opens_at: opensAt.toISOString(),
+      closes_at: closesAt.toISOString(),
+      in_game_day_opens: day,
+      total_votes_cast: 0,
+      metadata: { auto_generated: true, in_game_year: year },
+    })
+    .select("id")
+    .single();
+
+  if (!newVote) return;
+
+  // Insert options
+  await db.from("vote_options").insert(
+    voteData.options.map((opt) => ({
+      vote_id: newVote.id,
+      title: opt.title,
+      description: opt.description,
+      effect_summary: opt.effect_summary,
+      effect_config: opt.effect_config as Json,
+      votes_count: 0,
+      token_votes_count: 0,
+    }))
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main simulation tick
 // ---------------------------------------------------------------------------
 
@@ -552,6 +1088,29 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     // World-level events
     const worldEvents = generateWorldEvents(world.id, persons, settlements, newDay, newYear);
     allEvents.push(...worldEvents);
+
+    // Clan relations & war simulation
+    try {
+      const warEvents = await tickClanRelations(db, world.id, newDay, newYear);
+      allEvents.push(...warEvents);
+    } catch (err) {
+      console.error("[Engine] War tick failed:", err);
+    }
+
+    // Vote resolution (close expired votes and apply effects)
+    try {
+      const voteEvents = await resolveExpiredVotes(db, world.id, newDay, newYear);
+      allEvents.push(...voteEvents);
+    } catch (err) {
+      console.error("[Engine] Vote resolution failed:", err);
+    }
+
+    // Auto-create next vote if none open
+    try {
+      await maybeCreateVote(db, world.id, newDay, newYear, world.in_game_day);
+    } catch (err) {
+      console.error("[Engine] Vote creation failed:", err);
+    }
 
     // Build world config update (preserve existing config fields)
     const existingConfig = (world.config ?? {}) as Record<string, unknown>;

@@ -2,13 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const admin = createAdminClient()
-  const { data: votes } = await admin
+  const worldId = req.nextUrl.searchParams.get('worldId')
+
+  let query = admin
     .from('world_votes')
     .select(`*, vote_options(*)`)
     .order('created_at', { ascending: false })
     .limit(10)
+
+  if (worldId) {
+    query = query.eq('world_id', worldId) as typeof query
+  }
+
+  const { data: votes } = await query
   return NextResponse.json({ votes: votes ?? [] })
 }
 
@@ -67,21 +75,14 @@ export async function POST(req: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Increment option count
-  try {
-    await admin.rpc('increment_vote_count', {
-      p_option_id: optionId,
-      p_token_amount: tokenAmount,
-    })
-  } catch {
-    // fallback: update manually
-    await admin.from('vote_options')
-      .update({ votes_count: vote.total_votes_cast + 1 })
-      .eq('id', optionId)
-  }
+  await admin.rpc('increment_vote_count', {
+    p_option_id: optionId,
+    p_token_amount: tokenAmount,
+  })
 
   // Update total
   await admin.from('world_votes')
-    .update({ total_votes_cast: vote.total_votes_cast + 1 })
+    .update({ total_votes_cast: (vote.total_votes_cast ?? 0) + 1 })
     .eq('id', voteId)
 
   return NextResponse.json({ success: true })
