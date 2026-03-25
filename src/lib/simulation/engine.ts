@@ -249,6 +249,91 @@ interface PendingEvent {
   metadata: Json;
 }
 
+function generateNotableMoment(p: DbPerson, day: number, year: number): PendingEvent | null {
+  const name = p.name;
+  const occ = (p.occupation ?? "villager").toLowerCase();
+  const action = p.current_action ?? "";
+
+  // Occupation-keyed event pools: [title, description]
+  const pools: Record<string, Array<[string, string]>> = {
+    hunter: [
+      [`${name} returns with a great kill`, `After days in the wild, ${name} drags back enough meat to feed the settlement for a week. The hunt was dangerous but precise.`],
+      [`${name} tracks something strange`, `${name} follows unusual prints into the forest. Whatever made them was large — and it knew it was being followed.`],
+      [`${name} teaches the younger ones to hunt`, `${name} spends the morning showing the settlement's youth how to set snares and read animal signs in the mud.`],
+    ],
+    farmer: [
+      [`${name}'s harvest draws admiration`, `The rows ${name} has tended burst with grain. Others come to look, to learn, to copy the technique.`],
+      [`${name} fights to save the crop`, `A blight threatens the fields. ${name} works through the night pulling diseased stalks before it spreads.`],
+      [`${name} tries something new with the soil`, `${name} mixes wood ash into the earth before sowing — an old idea, tested with fresh determination.`],
+    ],
+    healer: [
+      [`${name} pulls someone back from the edge`, `A fever that had lasted three days broke this morning. ${name} never left the patient's side.`],
+      [`${name} grinds new herbs by firelight`, `${name} is trying a remedy no one has used here before — something remembered from a distant elder's teaching.`],
+      [`${name} tends the wounded in silence`, `After a rough day in the valley, ${name} moves from person to person, setting bones and cleaning wounds without a word of complaint.`],
+    ],
+    trader: [
+      [`${name} strikes an unexpected deal`, `A traveller passed through and ${name} bartered well — what left as surplus returned as something the settlement badly needed.`],
+      [`${name} argues the clan's worth in open market`, `Voices were raised. ${name} held firm. The terms, in the end, favoured the clan.`],
+      [`${name} maps the road ahead`, `${name} notes which paths are passable, which tolls are fair, and which traders are worth trusting next season.`],
+    ],
+    guard: [
+      [`${name} holds the line through the night`, `Something circled the settlement in the dark. ${name} did not sleep. At dawn, it was gone.`],
+      [`${name} catches a trespasser`, `A stranger was found too close to the storehouse. ${name} handled it firmly — no blood spilled, message received.`],
+      [`${name} drills the others until they're sharp`, `${name} ran the settlement's defenders through their paces until every stance was right and every reaction quick.`],
+    ],
+    scout: [
+      [`${name} brings back word of movement beyond the ridge`, `Something is changing in the lands to the north. ${name}'s report is brief but urgent.`],
+      [`${name} finds a path no one knew existed`, `Following the river upstream, ${name} discovered a narrow pass that cuts through the stone heights. It could matter greatly.`],
+      [`${name} maps the territory in careful scratches`, `${name} spent the day walking boundaries and marking what was seen. The valley is larger than most know.`],
+    ],
+    fisher: [
+      [`${name} hauls in more than expected`, `The net came up heavy this morning. ${name} worked the river for hours, reading the currents like an old friend.`],
+      [`${name} finds a new stretch of river`, `Upstream, where most don't go, ${name} found still water full of fish. Tomorrow there will be enough for everyone.`],
+    ],
+    crafter: [
+      [`${name} finishes something remarkable`, `${name} holds it up to the light — whatever it is, it's better than anything made here before. People gather to look.`],
+      [`${name} solves a problem that had stumped the others`, `The tool kept breaking. ${name} studied the break, changed the angle, chose different material. It holds now.`],
+      [`${name} works through the night on an idea`, `The fire in the workshop burned until dawn. Whatever ${name} is making, it cannot wait.`],
+    ],
+    leader: [
+      [`${name} settles a dispute before it turns bitter`, `Two voices were raised. ${name} listened to both, said little, and found the middle ground. The valley is quieter for it.`],
+      [`${name} speaks of what is coming`, `Gathered around the fire, the clan listened as ${name} laid out the season ahead — the risks, the work, the hope.`],
+      [`${name} earns quiet respect`, `No grand gesture. Just steady presence, sound decisions, and a word at the right moment. ${name}'s standing grows.`],
+    ],
+  };
+
+  // Match occupation to a pool key
+  const poolKey = Object.keys(pools).find(k => occ.includes(k)) ?? "default";
+
+  const defaultPool: Array<[string, string]> = [
+    [`${name} leaves a mark on the day`, action
+      ? `${name} was seen ${action.toLowerCase().replace(/^(he|she|they) (is |was |are )?/, "")}. It will be remembered.`
+      : `A quiet act, a moment of clarity. ${name} did what needed doing, and the valley is better for it.`],
+    [`${name} is watched by those who matter`, `Word of ${name}'s recent work has spread. Not loudly — but those with sharp eyes have noticed.`],
+    [`The valley speaks ${name}'s name today`, action
+      ? `"${action}" — that is what people say when asked what ${name} was doing. It means more than it sounds.`
+      : `${name}'s name passes between people today, said in the tone reserved for those who have earned respect.`],
+  ];
+
+  const pool = pools[poolKey] ?? defaultPool;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+
+  return {
+    world_id: p.world_id,
+    event_type: "CUSTOM",
+    title: pick[0],
+    description: pick[1],
+    primary_person_id: p.id,
+    settlement_id: p.residence_id,
+    significance_score: 55,
+    is_milestone: false,
+    is_featured: true,
+    in_game_day: day,
+    in_game_year: year,
+    metadata: { occupation: p.occupation, action: p.current_action },
+  };
+}
+
 function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
   const events: PendingEvent[] = [];
 
@@ -341,20 +426,8 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
       metadata: { new_occupation: newJob },
     });
   } else if (roll < 0.04 && p.is_featured) {
-    events.push({
-      world_id: p.world_id,
-      event_type: "CUSTOM",
-      title: `${p.name} does something notable`,
-      description: `The people of the valley take note of ${p.name}'s actions.`,
-      primary_person_id: p.id,
-      settlement_id: p.residence_id,
-      significance_score: 55,
-      is_milestone: false,
-      is_featured: true,
-      in_game_day: day,
-      in_game_year: year,
-      metadata: {},
-    });
+    const notableEvent = generateNotableMoment(p, day, year);
+    if (notableEvent) events.push(notableEvent);
   }
 
   // Progress skills from current action
@@ -400,11 +473,16 @@ function generateWorldEvents(
     const parent = fertile[Math.floor(Math.random() * fertile.length)];
     const childNames = ["Asha", "Bren", "Cael", "Dara", "Elin", "Fion", "Gwen", "Hale", "Ivy", "Jael"];
     const childName = childNames[Math.floor(Math.random() * childNames.length)];
+    const birthDescs = [
+      `${childName} is born before dawn, small and loud. ${parent.name} does not sleep. By morning, the whole settlement knows.`,
+      `${parent.name} holds ${childName} for the first time — a new life in the valley, one more soul to feed, to protect, to watch grow.`,
+      `The birth was hard. ${parent.name} survived it. So did ${childName}. The valley has one more person now.`,
+    ];
     events.push({
       world_id: worldId,
       event_type: "BIRTH",
-      title: "A child is born in the valley",
-      description: `${childName} comes into the world near ${parent.name}'s settlement.`,
+      title: `${childName} is born into the valley`,
+      description: birthDescs[Math.floor(Math.random() * birthDescs.length)],
       primary_person_id: parent.id,
       settlement_id: parent.residence_id,
       significance_score: 35,
@@ -423,11 +501,16 @@ function generateWorldEvents(
       const shuffled = [...adults].sort(() => Math.random() - 0.5);
       const a = shuffled[0];
       const b = shuffled[1];
+      const marriageDescs = [
+        `${a.name} and ${b.name} made their vows at dusk, the fire between them. The settlement feasted late into the night.`,
+        `It was not arranged. It was not expected. But ${a.name} and ${b.name} stood before the clan and spoke plainly. The valley approves.`,
+        `${a.name} and ${b.name} have been inseparable for months. Now it is made formal. Two households, one hearth.`,
+      ];
       events.push({
         world_id: worldId,
         event_type: "MARRIAGE",
         title: `${a.name} and ${b.name} are joined`,
-        description: `The valley witnesses the union of ${a.name} and ${b.name}.`,
+        description: marriageDescs[Math.floor(Math.random() * marriageDescs.length)],
         primary_person_id: a.id,
         settlement_id: a.residence_id,
         significance_score: 45,
@@ -443,13 +526,19 @@ function generateWorldEvents(
   // Crime / conflict event
   if (Math.random() < 0.01 && alive.length > 0) {
     const offender = alive[Math.floor(Math.random() * alive.length)];
-    const crimes = ["theft", "trespass", "assault", "poaching"];
-    const crime = crimes[Math.floor(Math.random() * crimes.length)];
+    const crimePool: Array<[string, string, string]> = [
+      ["theft", `${offender.name} caught stealing from the storehouse`, `Three days' worth of grain, gone. Eyes turned to ${offender.name}. The accused said nothing. Tensions are high.`],
+      ["trespass", `${offender.name} found in forbidden territory`, `${offender.name} was discovered where they had no right to be. Whether it was curiosity or calculation, the clan wants answers.`],
+      ["assault", `${offender.name} strikes a fellow valley dweller`, `Voices were raised, then fists. ${offender.name} struck first. The injured party is recovering. The matter is not yet settled.`],
+      ["poaching", `${offender.name} accused of poaching on another clan's land`, `The tracks led back to ${offender.name}. A deer taken from grounds that were not theirs to hunt. The other clan has heard.`],
+      ["deception", `${offender.name} caught in a lie`, `A trade that seemed fair turned sour when the truth came out. ${offender.name} knew all along. Trust is harder to rebuild than a fence.`],
+    ];
+    const [crime, crimeTitle, crimeDesc] = crimePool[Math.floor(Math.random() * crimePool.length)];
     events.push({
       world_id: worldId,
       event_type: "BETRAYAL",
-      title: `${offender.name} accused of ${crime}`,
-      description: `Tensions rise as ${offender.name} stands accused of ${crime} in the valley.`,
+      title: crimeTitle,
+      description: crimeDesc,
       primary_person_id: offender.id,
       settlement_id: offender.residence_id,
       significance_score: 30,
