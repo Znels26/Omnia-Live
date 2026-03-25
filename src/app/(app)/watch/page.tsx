@@ -55,8 +55,8 @@ export default function WatchPage() {
     // Sync fresh state from DB every 8 seconds
     pollRef.current = setInterval(loadWorldState, 8000);
 
-    // AI character decisions every 30 seconds
-    aiTickRef.current = setInterval(runAITick, 30000);
+    // AI character decisions every 15 seconds
+    aiTickRef.current = setInterval(runAITick, 15000);
 
     // Story director every 5 minutes
     directorRef.current = setInterval(runDirector, 5 * 60 * 1000);
@@ -358,6 +358,11 @@ function PanelTabs({
 }) {
   const [tab, setTab] = useState<Tab>("events");
 
+  // Auto-switch to beings tab when a canvas being is clicked
+  useEffect(() => {
+    if (selectedBeing) setTab("beings");
+  }, [selectedBeing?.id]);
+
   const tabs: { id: Tab; label: string }[] = [
     { id: "events", label: "Events" },
     { id: "beings", label: "Beings" },
@@ -538,6 +543,14 @@ function BeingsPanel({
               {selected.fears && selected.fears.slice(0, 2).map((fear, i) => (
                 <span key={`f${i}`} className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/20 text-red-300 border border-red-500/20">{fear}</span>
               ))}
+            </div>
+          )}
+
+          {/* Backstory */}
+          {selected.backstory && (
+            <div className="mb-3 px-2 py-1.5 rounded bg-fv-card border border-fv-border/40">
+              <div className="text-[10px] text-fv-text-dim uppercase tracking-wider mb-0.5">Origin</div>
+              <p className="text-xs text-fv-text-muted leading-relaxed line-clamp-3">{selected.backstory}</p>
             </div>
           )}
 

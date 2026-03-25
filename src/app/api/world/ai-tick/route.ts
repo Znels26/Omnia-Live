@@ -50,8 +50,12 @@ export async function POST() {
     ])
 
     const featured = (allPersons ?? []).filter(p => p.is_featured === true)
-    // Fallback: if no is_featured column returned, treat first 8 as core
-    const corePersons = featured.length > 0 ? featured.slice(0, 8) : (allPersons ?? []).slice(0, 8)
+    const nonFeatured = (allPersons ?? []).filter(p => !p.is_featured)
+    // Core featured chars + random sample of 4 non-featured for broader world activity
+    const randomNonFeatured = nonFeatured.sort(() => Math.random() - 0.5).slice(0, 4)
+    const corePersons = featured.length > 0
+      ? [...featured.slice(0, 8), ...randomNonFeatured]
+      : [...(allPersons ?? []).slice(0, 8)]
 
     if (!corePersons.length) return NextResponse.json({ ok: true, processed: 0, interactions: 0 })
 
@@ -219,12 +223,12 @@ async function runInteractions(
   const alive = allPersons.filter(p => (p as Record<string, unknown>).is_alive !== false)
   const pairs: Array<[Record<string, unknown>, Record<string, unknown>]> = []
 
-  for (let i = 0; i < alive.length && pairs.length < 6; i++) {
-    for (let j = i + 1; j < alive.length && pairs.length < 6; j++) {
+  for (let i = 0; i < alive.length && pairs.length < 8; i++) {
+    for (let j = i + 1; j < alive.length && pairs.length < 8; j++) {
       const a = alive[i], b = alive[j]
       const dx = Number(a.pos_x) - Number(b.pos_x)
       const dy = Number(a.pos_y) - Number(b.pos_y)
-      if (Math.sqrt(dx * dx + dy * dy) < 100) {
+      if (Math.sqrt(dx * dx + dy * dy) < 140) {
         pairs.push([a, b])
       }
     }
@@ -232,10 +236,10 @@ async function runInteractions(
 
   if (pairs.length === 0) return 0
 
-  // Only run interactions for a random subset (max 3, 40% chance each)
+  // Run interactions for a subset (max 4, 60% chance each)
   const selected = pairs
-    .filter(() => Math.random() < 0.4)
-    .slice(0, 3)
+    .filter(() => Math.random() < 0.6)
+    .slice(0, 4)
 
   const results = await Promise.allSettled(
     selected.map(([a, b]) => interactPair(a, b, cultures, eraMap, recentEvents, world, db, activeCrisis))

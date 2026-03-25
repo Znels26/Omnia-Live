@@ -26,7 +26,12 @@ export async function GET() {
         is_alive, is_featured, health_score, happiness_score,
         pos_x, pos_y, culture_id,
         trait_ambition, trait_aggression, trait_sociability,
-        need_hunger, need_stress, need_hope, current_action, current_goal
+        trait_loyalty, trait_curiosity, trait_spirituality,
+        trait_generosity, trait_honesty, trait_vindictiveness,
+        need_hunger, need_stress, need_hope, need_fatigue,
+        need_belonging, need_safety,
+        current_action, current_goal,
+        backstory, description, metadata
       )
     `)
     .eq('slug', 'first-valley')
@@ -66,43 +71,70 @@ export async function GET() {
     return 'ADULT'
   }
 
+  // Derive human-readable drives/fears from personality trait scores
+  function derivePersonality(p: any): { drives: string[]; fears: string[] } {
+    const drives: string[] = []
+    const fears: string[] = []
+    if ((p.trait_ambition ?? 5) >= 7) drives.push('Rise above their station')
+    if ((p.trait_curiosity ?? 5) >= 7) drives.push('Discover what lies beyond')
+    if ((p.trait_spirituality ?? 5) >= 7) drives.push('Honor the ancient spirits')
+    if ((p.trait_generosity ?? 5) >= 7) drives.push('Provide for others')
+    if ((p.trait_sociability ?? 5) >= 7) drives.push('Build bonds with the clan')
+    if ((p.trait_loyalty ?? 5) >= 7) drives.push('Protect those they love')
+    if ((p.trait_honesty ?? 5) >= 7) drives.push('Speak truth, whatever the cost')
+    if ((p.trait_aggression ?? 5) >= 7) drives.push('Prove their strength')
+    if ((p.trait_vindictiveness ?? 5) >= 7) fears.push('Being wronged without recourse')
+    if ((p.trait_aggression ?? 5) <= 3) fears.push('Open confrontation')
+    if ((p.trait_curiosity ?? 5) <= 3) fears.push('The unknown')
+    if ((p.need_safety ?? 3) >= 6) fears.push('Dying alone in the dark')
+    if ((p.need_belonging ?? 3) >= 6) fears.push('Being cast out by the clan')
+    if ((p.health_score ?? 7) <= 4) fears.push('Their body failing them')
+    return { drives: drives.slice(0, 3), fears: fears.slice(0, 2) }
+  }
+
   const beings: SimBeing[] = ((world as any).persons ?? [])
     .filter((p: any) => p.is_alive !== false)
-    .map((p: any) => ({
-      id: p.id,
-      worldId: world.id,
-      clanId: p.culture_id ?? null,
-      regionId: null,
-      name: p.name,
-      age: p.age ?? 25,
-      lifeStage: mapLifeStage(p.life_stage ?? 'adult'),
-      role: p.occupation ?? 'Villager',
-      isCore: p.is_featured ?? false,
-      status: 'ALIVE' as BeingStatus,
-      x: Number(p.pos_x) || Math.random() * 700 + 50,
-      y: Number(p.pos_y) || Math.random() * 480 + 40,
-      bravery: (p.trait_aggression ?? 5) * 10,
-      cunning: 50,
-      empathy: (p.trait_sociability ?? 5) * 10,
-      ambition: (p.trait_ambition ?? 5) * 10,
-      wisdom: 50,
-      charisma: 50,
-      health: (p.health_score ?? 7) * 10,
-      hunger: 100 - (p.need_hunger ?? 2) * 10,
-      thirst: 80,
-      fatigue: 20,
-      happiness: (p.happiness_score ?? 6) * 10,
-      fear: (p.need_stress ?? 2) * 10,
-      anger: 20,
-      hope: 100 - (p.need_hope ?? 4) * 10,
-      primaryGoal: p.current_goal ?? null,
-      currentAction: p.current_action ?? null,
-      drives: [],
-      fears: [],
-      beliefs: {},
-      trustMap: {},
-      relationships: [],
-    }))
+    .map((p: any) => {
+      const { drives, fears } = derivePersonality(p)
+      const meta = (p.metadata ?? {}) as Record<string, unknown>
+      return {
+        id: p.id,
+        worldId: world.id,
+        clanId: p.culture_id ?? null,
+        regionId: null,
+        name: p.name,
+        age: p.age ?? 25,
+        lifeStage: mapLifeStage(p.life_stage ?? 'adult'),
+        role: p.occupation ?? 'Villager',
+        isCore: p.is_featured ?? false,
+        status: 'ALIVE' as BeingStatus,
+        x: Number(p.pos_x) || Math.random() * 700 + 50,
+        y: Number(p.pos_y) || Math.random() * 480 + 40,
+        bravery: (p.trait_aggression ?? 5) * 10,
+        cunning: (p.trait_curiosity ?? 5) * 10,
+        empathy: (p.trait_sociability ?? 5) * 10,
+        ambition: (p.trait_ambition ?? 5) * 10,
+        wisdom: (p.trait_spirituality ?? 5) * 10,
+        charisma: (p.trait_honesty ?? 5) * 10,
+        health: (p.health_score ?? 7) * 10,
+        hunger: 100 - (p.need_hunger ?? 2) * 10,
+        thirst: 80,
+        fatigue: (p.need_fatigue ?? 2) * 10,
+        happiness: (p.happiness_score ?? 6) * 10,
+        fear: (p.need_stress ?? 2) * 10,
+        anger: (p.trait_vindictiveness ?? 3) * 10,
+        hope: 100 - (p.need_hope ?? 4) * 10,
+        primaryGoal: p.current_goal ?? null,
+        currentAction: p.current_action ?? null,
+        drives,
+        fears,
+        beliefs: {},
+        trustMap: {},
+        relationships: [],
+        description: p.description ?? null,
+        backstory: p.backstory ?? null,
+      }
+    })
 
   // Map settlements → SimSettlement
   function mapSettlementType(t: string): SimSettlement['type'] {
@@ -183,16 +215,32 @@ export async function GET() {
     .order('created_at', { ascending: false })
     .limit(50)
 
+  function mapEventCategory(type: string): SimEvent['category'] {
+    switch (type) {
+      case 'BIRTH': case 'MARRIAGE': case 'SOCIAL': case 'FIRST_CONTACT': return 'SOCIAL'
+      case 'DEATH': case 'ASSASSINATION': return 'SOCIAL'
+      case 'WAR_DECLARED': case 'BATTLE': case 'PEACE_TREATY': case 'INTERVENTION': return 'MILITARY'
+      case 'PLAGUE': case 'FAMINE': case 'DROUGHT': case 'FLOOD': case 'FIRE': case 'NATURAL_DISASTER': return 'SURVIVAL'
+      case 'RITUAL': case 'RELIGION_FOUNDED': case 'MIRACLE': return 'SPIRITUAL'
+      case 'DISCOVERY': case 'INVENTION': case 'MONUMENT_BUILT': return 'CULTURAL'
+      case 'TRADE_ROUTE': case 'FEAST': return 'ECONOMIC'
+      case 'MIGRATION': case 'SETTLEMENT_FOUNDED': case 'SETTLEMENT_DESTROYED': return 'NATURAL'
+      case 'ERA_TRANSITION': case 'RULER_CHANGED': case 'ELECTION': return 'POLITICAL'
+      case 'VIEWER_VOTE': return 'VIEWER'
+      default: return 'GENERAL'
+    }
+  }
+
   const events: SimEvent[] = (rawEvents ?? []).map((e: any) => ({
     id: e.id,
     worldId: e.world_id,
     type: (e.event_type ?? 'CUSTOM') as SimEvent['type'],
-    category: 'GENERAL' as const,
+    category: mapEventCategory(e.event_type ?? 'CUSTOM'),
     title: e.title,
-    description: e.description,
-    tick: 0,
+    description: e.description ?? '',
+    tick: e.in_game_day ?? 0,
     worldTime: 12,
-    importance: (e.significance_score ?? 1) * 10,
+    importance: Math.round((e.significance_score ?? 1) * 10),
     highlighted: e.is_featured ?? false,
     clanId: e.culture_id ?? undefined,
     beingId: e.primary_person_id ?? undefined,

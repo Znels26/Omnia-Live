@@ -239,7 +239,7 @@ async function movePeople(worldId: string) {
     const newY = clamp(Number(p.pos_y) + (ty - Number(p.pos_y)) * 0.18, 50, 510)
 
     const dayActions = getOccupationActions(occ, isNight)
-    const action = Math.random() < 0.1
+    const action = Math.random() < 0.25
       ? dayActions[Math.floor(Math.random() * dayActions.length)]
       : p.current_action
 
