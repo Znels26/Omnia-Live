@@ -9,6 +9,8 @@ import { formatWorldAge, formatWorldTime, worldTickToTime } from "@/lib/utils";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 
 type DirectorArc = {
   arc_title: string;
@@ -29,6 +31,7 @@ export default function WatchPage() {
   const [since, setSince] = useState<string | null>(null);
   const [tickStatus, setTickStatus] = useState<"ok" | "err" | "idle">("idle");
   const [directorArc, setDirectorArc] = useState<DirectorArc>(null);
+  const [isGod, setIsGod] = useState(false);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
   const clockRef = useRef<NodeJS.Timeout | null>(null);
@@ -38,6 +41,12 @@ export default function WatchPage() {
   const clientTimeRef = useRef<number>(8);
 
   useEffect(() => {
+    // Check if God Mode user
+    const supabase = createClient();
+    supabase.auth.getUser().then(({ data }) => {
+      if (data.user?.email === "zacharynelson96@gmail.com") setIsGod(true);
+    });
+
     loadWorldState();
 
     // Core simulation tick every 3 seconds
@@ -54,10 +63,11 @@ export default function WatchPage() {
     // Run director on load after a short delay
     setTimeout(runDirector, 4000);
 
-    // Smooth client clock: 1 sim day = 12 real hours
-    // Rate: 24 / (12h * 3600s/h / 0.2s per tick) = 24/216000 = 1/9000 world-hours per tick
+    // Client clock derived from real time: 1 game day = 12 real hours
+    // Always in sync — no drift from setInterval imprecision
+    const GAME_DAY_MS = 12 * 60 * 60 * 1000;
     clockRef.current = setInterval(() => {
-      clientTimeRef.current = (clientTimeRef.current + 1 / 9000) % 24;
+      clientTimeRef.current = ((Date.now() % GAME_DAY_MS) / GAME_DAY_MS) * 24;
 
       setWorldState(prev => {
         if (!prev) return prev;
@@ -198,6 +208,23 @@ export default function WatchPage() {
           onSelectClan={setSelectedClan}
           className="absolute inset-0 w-full h-full"
         />
+
+        {/* ── God Mode Button (admin only) ── */}
+        {isGod && (
+          <Link
+            href="/admin/god"
+            className="absolute top-3 left-3 z-30 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-display uppercase tracking-wide transition-all duration-200"
+            style={{
+              background: "rgba(20,10,5,0.75)",
+              border: "1px solid rgba(212,175,55,0.5)",
+              color: "rgba(212,175,55,0.9)",
+              backdropFilter: "blur(8px)",
+            }}
+          >
+            <span>⚡</span>
+            <span>God Mode</span>
+          </Link>
+        )}
 
         {/* ── Since Last Visit Banner ── */}
         {since && (

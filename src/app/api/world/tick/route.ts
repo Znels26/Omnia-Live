@@ -163,8 +163,10 @@ async function movePeople(worldId: string) {
 
   if (!persons?.length) return
 
-  const config = (worldRow?.config ?? {}) as Record<string, unknown>
-  const worldTime = (config.world_time as number) ?? 12
+  // Derive worldTime from real clock: 1 game day = 12 real hours
+  // This ensures time-of-day logic (night/dawn/evening) actually works
+  const GAME_DAY_MS = 12 * 60 * 60 * 1000
+  const worldTime = ((Date.now() % GAME_DAY_MS) / GAME_DAY_MS) * 24
 
   const isNight   = worldTime < 5.5 || worldTime > 21.5
   const isDawn    = worldTime >= 5.5 && worldTime < 7

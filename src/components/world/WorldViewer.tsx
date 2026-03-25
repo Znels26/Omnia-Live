@@ -329,10 +329,17 @@ export function WorldViewer({
     drawWeather(ctx, weather, W, H, t, particlesRef, scaleX, scaleY);
 
     // ── Day/Night Overlay ──────────────────────────────────────────
-    if (ambientLight < 0.7) {
-      const nightOpacity = (0.7 - ambientLight) * 0.85;
-      ctx.fillStyle = `rgba(8, 8, 30, ${nightOpacity})`;
-      ctx.fillRect(0, 0, W, H);
+    // Only apply for genuine night hours (not dusk/dawn — sky handles those)
+    if (worldTime < 6.5 || worldTime > 20.5) {
+      // Fade in gently: 0 at dusk/dawn boundaries, max at full night
+      const nightDepth = worldTime > 12
+        ? Math.min((worldTime - 20.5) / 1.5, 1)   // evening → night
+        : Math.min((6.5 - worldTime) / 1.5, 1);    // night → dawn
+      const nightOpacity = Math.max(0, nightDepth) * 0.28;
+      if (nightOpacity > 0.01) {
+        ctx.fillStyle = `rgba(8, 8, 30, ${nightOpacity})`;
+        ctx.fillRect(0, 0, W, H);
+      }
     }
 
     // ── Fog Effect ────────────────────────────────────────────────

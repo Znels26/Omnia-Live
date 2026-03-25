@@ -207,7 +207,12 @@ export async function GET() {
     id: world.id,
     name: world.name,
     tick: 0,
-    worldTime: (config.world_time as number) ?? 8,
+    // Derive worldTime from real clock so it's always accurate on load
+    // 1 game day = 12 real hours, so the cycle repeats every 12h
+    worldTime: (() => {
+      const GAME_DAY_MS = 12 * 60 * 60 * 1000
+      return ((Date.now() % GAME_DAY_MS) / GAME_DAY_MS) * 24
+    })(),
     age: 'SURVIVAL',
     paused: (config.paused as boolean) ?? false,
     weather: {
