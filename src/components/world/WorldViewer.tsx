@@ -250,15 +250,19 @@ export function WorldViewer({
       }
     }
 
-    // ── Settlements ───────────────────────────────────────────────
+    // ── Settlements + crop fields ─────────────────────────────────
     if (state?.settlements) {
+      // Draw crop fields behind settlements
+      for (const settlement of state.settlements) {
+        drawCropField(ctx, settlement, scaleX, scaleY, ambientLight, t);
+      }
       for (const settlement of state.settlements) {
         const clan = state.clans.find((c) => c.id === settlement.clanId);
         drawSettlement(ctx, settlement, clan?.color ?? "#8b4513", scaleX, scaleY, ambientLight, t);
       }
     }
 
-    // ── Beings ────────────────────────────────────────────────────
+    // ── Beings (y-sorted for depth) ───────────────────────────────
     if (state?.beings) {
       const alive = state.beings.filter((b) => b.status !== "DEAD");
       const cache = posCacheRef.current;
@@ -272,7 +276,14 @@ export function WorldViewer({
         }
       }
 
-      for (const being of alive) {
+      // Y-sort: beings further back (smaller y) drawn first so foreground overlaps
+      const sorted = [...alive].sort((a, b) => {
+        const ay = cache.get(a.id)?.cy ?? a.y;
+        const by = cache.get(b.id)?.cy ?? b.y;
+        return ay - by;
+      });
+
+      for (const being of sorted) {
         const isSelected = being.id === selectedBeing;
         const isHovered = being.id === hoveredBeing?.id;
         const clan = state.clans.find((c) => c.id === being.clanId);
@@ -728,6 +739,61 @@ function drawRegion(
   ctx.fillText(region.name, x, y + 4 * scaleY);
 }
 
+function drawCropField(
+  ctx: CanvasRenderingContext2D,
+  settlement: { x: number; y: number; type: string; population: number },
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number,
+  t: number
+) {
+  // Only villages and above get visible crop fields
+  if (settlement.type === 'CAMP' || settlement.type === 'RUINS') return;
+
+  const s = Math.min(scaleX, scaleY);
+  const fieldCount = settlement.type === 'CITY' ? 4 : settlement.type === 'TOWN' ? 3 : settlement.type === 'VILLAGE' ? 2 : 1;
+
+  // Deterministic field positions around settlement
+  const offsets = [
+    { dx: -60, dy: 30 }, { dx: 55, dy: 35 },
+    { dx: -40, dy: 55 }, { dx: 60, dy: 55 },
+  ];
+
+  for (let i = 0; i < fieldCount; i++) {
+    const off = offsets[i];
+    const fx = (settlement.x + off.dx) * scaleX;
+    const fy = (settlement.y + off.dy) * scaleY;
+    const fw = (22 + i * 6) * scaleX;
+    const fh = (14 + i * 4) * scaleY;
+
+    ctx.save();
+    ctx.globalAlpha = 0.35 + ambientLight * 0.2;
+
+    // Field base
+    ctx.fillStyle = '#4a7a20';
+    ctx.fillRect(fx, fy, fw, fh);
+
+    // Crop rows — animated gentle sway
+    const rowCount = 4;
+    ctx.strokeStyle = `rgba(80, 140, 40, 0.7)`;
+    ctx.lineWidth = 1.2 * s;
+    for (let r = 0; r < rowCount; r++) {
+      const ry = fy + (r / rowCount) * fh + fh / (rowCount * 2);
+      const sway = Math.sin(t * 0.6 + settlement.x * 0.02 + r * 0.8) * 1.5 * s;
+      ctx.beginPath();
+      ctx.moveTo(fx, ry);
+      for (let cx2 = fx; cx2 < fx + fw; cx2 += 5 * s) {
+        ctx.lineTo(cx2 + sway, ry - 2 * s);
+        ctx.lineTo(cx2 + 2.5 * s, ry);
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawSettlement(
   ctx: CanvasRenderingContext2D,
   settlement: { x: number; y: number; type: string; name: string; population: number },
@@ -918,7 +984,7 @@ function drawSettlement(
 
 function drawBeing(
   ctx: CanvasRenderingContext2D,
-  being: { id: string; x: number; y: number; status: string; isCore: boolean; name: string; currentAction: string | null },
+  being: { id: string; x: number; y: number; status: string; isCore: boolean; name: string; role: string; currentAction: string | null },
   clanColor: string,
   scaleX: number,
   scaleY: number,
@@ -1056,7 +1122,108 @@ function drawBeing(
     ctx.fill();
   }
 
+  // ── Occupation prop ───────────────────────────────────────────
+  const role = being.role.toLowerCase();
+  ctx.save();
+  const propAlpha = 0.55 + ambientLight * 0.3;
+
+  if (role.includes('hunt') || role.includes('ranger')) {
+    // Bow: arc on right side
+    ctx.globalAlpha = propAlpha;
+    ctx.strokeStyle = '#8b5e3c';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.arc(cx + 7 * s, shoulderY + 1 * s, 5 * s, -Math.PI * 0.65, Math.PI * 0.65);
+    ctx.stroke();
+    // Bowstring
+    ctx.strokeStyle = 'rgba(220,200,160,0.6)';
+    ctx.lineWidth = 0.8 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx + 7 * s, shoulderY + 1 * s - 5 * s * Math.sin(0.65));
+    ctx.lineTo(cx + 7 * s, shoulderY + 1 * s + 5 * s * Math.sin(0.65));
+    ctx.stroke();
+  } else if (role.includes('farm') || role.includes('herder') || role.includes('shepherd')) {
+    // Hoe / staff: diagonal line from hand down to ground
+    ctx.globalAlpha = propAlpha;
+    ctx.strokeStyle = '#6b4423';
+    ctx.lineWidth = 1.8 * s;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(cx + 6 * s, shoulderY + 2 * s);
+    ctx.lineTo(cx + 3 * s, groundY - 1 * s);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, groundY - 4 * s);
+    ctx.lineTo(cx + 6 * s, groundY - 2 * s);
+    ctx.stroke();
+  } else if (role.includes('guard') || role.includes('soldier') || role.includes('warrior')) {
+    // Spear: vertical pole with triangle head
+    ctx.globalAlpha = propAlpha;
+    ctx.strokeStyle = '#6b6b6b';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx + 9 * s, groundY);
+    ctx.lineTo(cx + 9 * s, headY - 10 * s);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(180,180,190,${propAlpha})`;
+    ctx.beginPath();
+    ctx.moveTo(cx + 9 * s, headY - 14 * s);
+    ctx.lineTo(cx + 6 * s, headY - 8 * s);
+    ctx.lineTo(cx + 12 * s, headY - 8 * s);
+    ctx.closePath();
+    ctx.fill();
+  } else if (role.includes('fish') || role.includes('sailor')) {
+    // Fishing rod angling forward from shoulder
+    ctx.globalAlpha = propAlpha;
+    ctx.strokeStyle = '#6b4423';
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx - 5 * s, shoulderY);
+    ctx.lineTo(cx - 16 * s, shoulderY - 14 * s);
+    ctx.stroke();
+    // Fishing line
+    ctx.strokeStyle = 'rgba(200,190,160,0.45)';
+    ctx.lineWidth = 0.7 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx - 16 * s, shoulderY - 14 * s);
+    ctx.lineTo(cx - 20 * s, shoulderY - 5 * s);
+    ctx.stroke();
+  } else if (role.includes('heal') || role.includes('shaman') || role.includes('priest')) {
+    // Green cross above head
+    const crossY = headY - headR * 1.5 - 8 * s;
+    ctx.globalAlpha = propAlpha * 0.85;
+    ctx.strokeStyle = 'rgba(80, 220, 130, 0.9)';
+    ctx.lineWidth = 1.8 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx, crossY - 4 * s);
+    ctx.lineTo(cx, crossY + 4 * s);
+    ctx.moveTo(cx - 4 * s, crossY);
+    ctx.lineTo(cx + 4 * s, crossY);
+    ctx.stroke();
+  } else if (role.includes('trade') || role.includes('merchant')) {
+    // Pack on back: small rectangle
+    ctx.globalAlpha = propAlpha * 0.75;
+    ctx.fillStyle = adjustBrightness(clanColor, 0.7);
+    ctx.strokeStyle = adjustBrightness(clanColor, 0.4);
+    ctx.lineWidth = 0.8 * s;
+    const packW = 6 * s, packH = 8 * s;
+    ctx.fillRect(cx - headR - packW, shoulderY, packW, packH);
+    ctx.strokeRect(cx - headR - packW, shoulderY, packW, packH);
+  } else if (role.includes('craft') || role.includes('smith') || role.includes('builder')) {
+    // Hammer: T-shape held up
+    ctx.globalAlpha = propAlpha;
+    ctx.strokeStyle = '#7a7a7a';
+    ctx.lineWidth = 1.8 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx + 7 * s, shoulderY);
+    ctx.lineTo(cx + 7 * s, hipY);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(140,130,120,${propAlpha})`;
+    ctx.fillRect(cx + 4 * s, shoulderY - 2 * s, 6 * s, 3 * s);
+  }
+
   ctx.restore();
+  ctx.globalAlpha = 1;
 
   // Name label (always for core, only on hover/select for others)
   if (being.isCore || isSelected || isHovered) {
