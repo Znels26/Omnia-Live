@@ -249,88 +249,138 @@ interface PendingEvent {
   metadata: Json;
 }
 
-function generateNotableMoment(p: DbPerson, day: number, year: number): PendingEvent | null {
+function generateNotableMoment(
+  p: DbPerson,
+  day: number,
+  year: number,
+  recentTitles: string[]
+): { event: PendingEvent; usedTitle: string } | null {
   const name = p.name;
   const occ = (p.occupation ?? "villager").toLowerCase();
-  const action = p.current_action ?? "";
 
-  // Occupation-keyed event pools: [title, description]
   const pools: Record<string, Array<[string, string]>> = {
     hunter: [
       [`${name} returns with a great kill`, `After days in the wild, ${name} drags back enough meat to feed the settlement for a week. The hunt was dangerous but precise.`],
-      [`${name} tracks something strange`, `${name} follows unusual prints into the forest. Whatever made them was large — and it knew it was being followed.`],
-      [`${name} teaches the younger ones to hunt`, `${name} spends the morning showing the settlement's youth how to set snares and read animal signs in the mud.`],
+      [`${name} tracks something strange in the wood`, `${name} follows unusual prints into the forest. Whatever made them was large — and it knew it was being followed.`],
+      [`${name} comes home from the hunt empty-handed`, `The forest gave nothing today. ${name} won't say what went wrong out there, but they came back quieter than usual.`],
+      [`Something tracked ${name} back to camp`, `${name} noticed movement in the shadows behind them on the return. Whatever it was stopped at the tree line and waited. They didn't sleep well.`],
+      [`${name} teaches the young ones to read the land`, `${name} spent the morning showing the settlement's youth how to set snares and find animal signs in the mud. The lesson landed.`],
+      [`${name} takes a wound during the hunt`, `A close call in the undergrowth. The wound is not deep, but ${name}'s confidence took the harder blow. They are back on their feet and saying little about it.`],
+      [`${name} discovers signs of a vast herd to the east`, `Following fresh tracks, ${name} found evidence of more animals than anyone has seen in years. The valley could eat well this season.`],
+      [`${name} sits at the treeline and does not move for hours`, `The others watched from a distance. When ${name} finally returned, they said only that they had been thinking.`],
+      [`${name} and a rival argue over who made the kill`, `The argument started quietly. By midday it had drawn a crowd. The kill was split, but the tension stayed.`],
+      [`${name} misses the shot that would have mattered`, `So close. ${name} watched the opportunity vanish into the trees and said nothing for the rest of the day.`],
+      [`${name} finds an old hunting camp, long abandoned`, `Deep in the wood, ${name} stumbled on a camp that hadn't been used in years. Old tools. Cold fire ring. Someone lived here once.`],
+      [`${name} returns before dawn with no explanation`, `Everyone was asleep. By the time the settlement woke, ${name} was already cleaning their gear. Whatever happened out there, they're keeping it to themselves.`],
     ],
     farmer: [
       [`${name}'s harvest draws admiration`, `The rows ${name} has tended burst with grain. Others come to look, to learn, to copy the technique.`],
-      [`${name} fights to save the crop`, `A blight threatens the fields. ${name} works through the night pulling diseased stalks before it spreads.`],
-      [`${name} tries something new with the soil`, `${name} mixes wood ash into the earth before sowing — an old idea, tested with fresh determination.`],
+      [`${name} fights through the night to save the crop`, `A blight threatened the fields. ${name} worked until dawn pulling diseased stalks before it spread. By morning, most was saved.`],
+      [`${name} tries something new with the soil`, `${name} mixes wood ash into the earth before sowing — an old idea, tested with fresh determination. No one knows yet if it will work.`],
+      [`${name}'s field fails to yield`, `The seeds went in right. The rain came when it should. But the crop came up thin and pale. ${name} stares at the rows and says nothing.`],
+      [`${name} argues with a neighbour over water rights`, `The irrigation channel only carries so much. Voices were raised. The matter is paused, not settled.`],
+      [`A late frost threatens everything ${name} has grown`, `The temperature dropped overnight. ${name} woke before anyone else and ran to the fields. Some plants will not recover.`],
+      [`${name} shares seed with a family who lost theirs`, `No one asked them to. ${name} simply came by with a portion of their store and left it without ceremony.`],
+      [`${name} notices something wrong with the soil near the river`, `The earth is darker than it should be. Smells different. ${name} doesn't know what it means yet, but they've been checking every day.`],
+      [`${name} teaches a child to tell good earth from bad`, `The lesson took most of the afternoon. The child paid attention. ${name} was not a patient teacher, but they were a thorough one.`],
+      [`${name} works the field alone well past dark`, `The others went in when the light faded. ${name} stayed. There is something in the work that quiets their mind.`],
+      [`${name}'s crop comes in after a long dry spell`, `Three seasons of uncertainty. One good morning. ${name} stood in the field for a while before cutting the first stalks.`],
     ],
     healer: [
       [`${name} pulls someone back from the edge`, `A fever that had lasted three days broke this morning. ${name} never left the patient's side.`],
+      [`${name} loses a patient despite everything`, `Sometimes there is nothing to be done. ${name} knew before the end came. The knowing does not make it easier.`],
       [`${name} grinds new herbs by firelight`, `${name} is trying a remedy no one has used here before — something remembered from a distant elder's teaching.`],
-      [`${name} tends the wounded in silence`, `After a rough day in the valley, ${name} moves from person to person, setting bones and cleaning wounds without a word of complaint.`],
+      [`${name} suspects something is spreading through the camp`, `Three people with the same symptoms in two days. ${name} is watching carefully, saying little, and moving quickly.`],
+      [`${name} tends the wounded without complaint`, `After a rough stretch in the valley, ${name} moves from person to person, setting bones, cleaning wounds. They do not rest until every hand is seen to.`],
+      [`${name} sits with a dying elder through the night`, `There was nothing left to treat. So ${name} just sat. The elder did not die alone, and that was the whole medicine of it.`],
+      [`${name} is asked for something beyond medicine`, `The request came quietly, after dark. ${name} listened. Whatever was asked, the answer took a long time coming.`],
+      [`${name} refuses to share a remedy with a rival settlement`, `The need was real. But so was ${name}'s caution. They weighed it carefully and said no.`],
+      [`${name} recognises a wound pattern they've seen before`, `The injury is unusual. ${name} went still when they saw it. Then they began to work very quickly.`],
+      [`${name} is changed by a patient's final words`, `The elder said something before the end. ${name} has not repeated it. But something in them is different since.`],
     ],
     trader: [
       [`${name} strikes an unexpected deal`, `A traveller passed through and ${name} bartered well — what left as surplus returned as something the settlement badly needed.`],
+      [`${name} gets the worst of an exchange`, `The trade seemed sound. It wasn't. ${name} realised it too late and has been trying to work out how they were fooled.`],
       [`${name} argues the clan's worth in open market`, `Voices were raised. ${name} held firm. The terms, in the end, favoured the clan.`],
-      [`${name} maps the road ahead`, `${name} notes which paths are passable, which tolls are fair, and which traders are worth trusting next season.`],
+      [`${name} returns from the road with news, not goods`, `The cargo was modest. But the information ${name} brought back is worth more than any pack animal could carry.`],
+      [`${name} brokers a peace between two disputing families`, `No one asked them to. ${name} simply saw the opportunity and took it. Both families owe them something now.`],
+      [`${name} suspects they were robbed on the road`, `Nothing is missing that can be proved. But the count is wrong, and ${name} knows the road between here and there.`],
+      [`${name} maps the next trade route carefully`, `${name} notes which paths are passable, which tolls are fair, and which traders are worth trusting next season.`],
     ],
     guard: [
       [`${name} holds the line through the night`, `Something circled the settlement in the dark. ${name} did not sleep. At dawn, it was gone.`],
-      [`${name} catches a trespasser`, `A stranger was found too close to the storehouse. ${name} handled it firmly — no blood spilled, message received.`],
-      [`${name} drills the others until they're sharp`, `${name} ran the settlement's defenders through their paces until every stance was right and every reaction quick.`],
+      [`${name} catches a trespasser near the storehouse`, `A stranger was found too close to the food stores. ${name} handled it firmly — no blood spilled, but the message was received.`],
+      [`${name} drills the others until every stance is right`, `${name} ran the settlement's defenders through their paces. No one enjoyed it. Everyone is sharper for it.`],
+      [`${name} stands at the perimeter and hears nothing — which worries them more`, `Silence in the wood is not always peace. ${name} stood at the edge a long time, reading the quiet for what it wasn't saying.`],
+      [`${name} recognises someone on the road they shouldn't`, `From a distance, in poor light. But ${name} is certain. They said nothing to the others. Not yet.`],
+      [`${name} questions a decision they made under pressure`, `It was the right call in the moment. Maybe. ${name} has been running it back in their mind, looking for the mistake.`],
+      [`${name} warns of danger that others dismiss`, `The signs are there if you know how to look. ${name} has reported them twice now. The settlement is listening less carefully each time.`],
     ],
     scout: [
       [`${name} brings back word of movement beyond the ridge`, `Something is changing in the lands to the north. ${name}'s report is brief but urgent.`],
-      [`${name} finds a path no one knew existed`, `Following the river upstream, ${name} discovered a narrow pass that cuts through the stone heights. It could matter greatly.`],
-      [`${name} maps the territory in careful scratches`, `${name} spent the day walking boundaries and marking what was seen. The valley is larger than most know.`],
+      [`${name} finds a path no one knew existed`, `Following the river upstream, ${name} discovered a narrow pass through the stone heights. It could matter greatly.`],
+      [`${name} loses the trail and returns with nothing`, `Three days out, nothing to show for it. ${name} will try again, but the doubt is visible to anyone who knows them.`],
+      [`${name} maps the full extent of the valley`, `${name} spent the day walking the boundary. What they found is both reassuring and troubling. The valley is larger than most know.`],
+      [`${name} has a close encounter beyond the border`, `They won't describe it in detail. Only that they ran. Only that they made it back. Only that whatever it was, it was organised.`],
+      [`${name} finds the ruins of an old settlement`, `The stones were small. Collapsed. No one there to ask what happened. ${name} stood in it for a while before coming back.`],
     ],
     fisher: [
       [`${name} hauls in more than expected`, `The net came up heavy this morning. ${name} worked the river for hours, reading the currents like an old friend.`],
       [`${name} finds a new stretch of river`, `Upstream, where most don't go, ${name} found still water full of fish. Tomorrow there will be enough for everyone.`],
+      [`${name}'s nets come up empty for the third day`, `The fish have moved, or been scared off, or there are simply fewer of them. ${name} is not saying which they think it is.`],
+      [`${name} watches the river change`, `The colour is different lately. The flow too. ${name} has been fishing here for years and something is not the same.`],
+      [`${name} pulls up something strange in the net`, `Not a fish. Not exactly. ${name} cut it loose and threw it back without showing anyone. They've been quiet about it since.`],
     ],
     crafter: [
       [`${name} finishes something remarkable`, `${name} holds it up to the light — whatever it is, it's better than anything made here before. People gather to look.`],
-      [`${name} solves a problem that had stumped the others`, `The tool kept breaking. ${name} studied the break, changed the angle, chose different material. It holds now.`],
+      [`${name} solves a problem that stumped the others`, `The tool kept breaking. ${name} studied the break, changed the angle, chose a different material. It holds now.`],
       [`${name} works through the night on an idea`, `The fire in the workshop burned until dawn. Whatever ${name} is making, it cannot wait.`],
+      [`${name}'s work falls apart on the final step`, `Hours of careful craft, undone at the end. ${name} sat with the pieces for a long time. Then they started over.`],
+      [`${name} teaches their method to whoever will stay and learn`, `Not everyone has the patience for it. The few who did got something that cannot be untaught.`],
+      [`${name} finds a material no one here has worked with before`, `Where they found it, they haven't said. What it can become, they're still figuring out. They seem excited in the way of someone who knows they're onto something.`],
     ],
     leader: [
       [`${name} settles a dispute before it turns bitter`, `Two voices were raised. ${name} listened to both, said little, and found the middle ground. The valley is quieter for it.`],
-      [`${name} speaks of what is coming`, `Gathered around the fire, the clan listened as ${name} laid out the season ahead — the risks, the work, the hope.`],
+      [`${name} faces a decision with no good answer`, `Whichever way this goes, someone suffers. ${name} has been sitting with it for days. The clan is watching.`],
+      [`${name} speaks of what is coming`, `Gathered around the fire, the clan listened as ${name} laid out the season ahead — the risks, the work, the hope. Most were reassured. Not all.`],
       [`${name} earns quiet respect`, `No grand gesture. Just steady presence, sound decisions, and a word at the right moment. ${name}'s standing grows.`],
+      [`${name}'s authority is tested openly`, `Someone spoke against a decision in front of the whole settlement. ${name} heard them out fully before responding.`],
+      [`${name} meets with a leader from another clan`, `The meeting was brief and cautious. Neither side gave much away. But it happened, which is more than before.`],
     ],
   };
 
-  // Match occupation to a pool key
-  const poolKey = Object.keys(pools).find(k => occ.includes(k)) ?? "default";
-
   const defaultPool: Array<[string, string]> = [
-    [`${name} leaves a mark on the day`, action
-      ? `${name} was seen ${action.toLowerCase().replace(/^(he|she|they) (is |was |are )?/, "")}. It will be remembered.`
-      : `A quiet act, a moment of clarity. ${name} did what needed doing, and the valley is better for it.`],
-    [`${name} is watched by those who matter`, `Word of ${name}'s recent work has spread. Not loudly — but those with sharp eyes have noticed.`],
-    [`The valley speaks ${name}'s name today`, action
-      ? `"${action}" — that is what people say when asked what ${name} was doing. It means more than it sounds.`
-      : `${name}'s name passes between people today, said in the tone reserved for those who have earned respect.`],
+    [`${name} leaves a mark on the day`, `A quiet act, a moment of clarity. ${name} did what needed doing, and the valley is better for it.`],
+    [`${name} is noticed by those who pay attention`, `Word of ${name}'s recent work has spread. Not loudly — but those with sharp eyes have taken note.`],
+    [`${name} sits apart from the others and watches`, `From a distance, ${name} observes the daily life of the valley. What they're thinking is not easy to guess.`],
+    [`${name} does something no one expected`, `No one was prepared for it. Neither, perhaps, was ${name}. But it happened, and it won't be forgotten soon.`],
   ];
 
+  const poolKey = Object.keys(pools).find(k => occ.includes(k)) ?? "default";
   const pool = pools[poolKey] ?? defaultPool;
-  const pick = pool[Math.floor(Math.random() * pool.length)];
+
+  // Deduplicate: filter out titles used recently, fall back to full pool if exhausted
+  const available = pool.filter(([title]) => !recentTitles.includes(title));
+  const usePool = available.length > 0 ? available : pool;
+
+  const pick = usePool[Math.floor(Math.random() * usePool.length)];
 
   return {
-    world_id: p.world_id,
-    event_type: "CUSTOM",
-    title: pick[0],
-    description: pick[1],
-    primary_person_id: p.id,
-    settlement_id: p.residence_id,
-    significance_score: 55,
-    is_milestone: false,
-    is_featured: true,
-    in_game_day: day,
-    in_game_year: year,
-    metadata: { occupation: p.occupation, action: p.current_action },
+    event: {
+      world_id: p.world_id,
+      event_type: "CUSTOM",
+      title: pick[0],
+      description: pick[1],
+      primary_person_id: p.id,
+      settlement_id: p.residence_id,
+      significance_score: 55,
+      is_milestone: false,
+      is_featured: true,
+      in_game_day: day,
+      in_game_year: year,
+      metadata: { occupation: p.occupation, action: p.current_action },
+    },
+    usedTitle: pick[0],
   };
 }
 
@@ -425,17 +475,32 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
       in_game_year: year,
       metadata: { new_occupation: newJob },
     });
-  } else if (roll < 0.04 && p.is_featured) {
-    const notableEvent = generateNotableMoment(p, day, year);
-    if (notableEvent) events.push(notableEvent);
   }
 
   // Progress skills from current action
   const currentSkills = getPersonSkills(p.metadata)
   const { skills: updatedSkills, changed: skillChanged } = progressSkillFromAction(currentSkills, p.current_action)
-  const updatedMetadata = skillChanged
-    ? { ...((p.metadata ?? {}) as Record<string, unknown>), skills: updatedSkills }
-    : p.metadata
+
+  // Build updated metadata (skills + event dedup)
+  const baseMeta = (p.metadata ?? {}) as Record<string, unknown>;
+  const recentEventTitles: string[] = Array.isArray(baseMeta.recentEventTitles)
+    ? (baseMeta.recentEventTitles as string[])
+    : [];
+
+  const metaPatch: Record<string, unknown> = {};
+
+  if (roll < 0.04 && p.is_featured) {
+    const notableResult = generateNotableMoment(p, day, year, recentEventTitles);
+    if (notableResult) {
+      events.push(notableResult.event);
+      metaPatch.recentEventTitles = [notableResult.usedTitle, ...recentEventTitles].slice(0, 10);
+    }
+  }
+
+  if (skillChanged) metaPatch.skills = updatedSkills;
+
+  const metaChanged = Object.keys(metaPatch).length > 0;
+  const updatedMetadata = metaChanged ? { ...baseMeta, ...metaPatch } : p.metadata;
 
   return {
     update: {
@@ -447,7 +512,7 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
       happiness_score: happiness,
       is_alive: isAlive,
       current_action: action,
-      ...(skillChanged ? { metadata: updatedMetadata as import('@/types/database').Json } : {}),
+      ...(metaChanged ? { metadata: updatedMetadata as import('@/types/database').Json } : {}),
     },
     events,
   };

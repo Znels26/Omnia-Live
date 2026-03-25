@@ -198,12 +198,13 @@ export default async function AdminDashboardPage() {
         </div>
 
         {/* Quick nav */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
             { href: '/admin/world', label: 'World Controls', icon: '🌍', desc: 'Simulation & regions' },
             { href: '/admin/characters', label: 'Characters', icon: '👥', desc: 'Persons inspector' },
             { href: '/admin/tokens', label: 'Token Economy', icon: '⚡', desc: 'Wallets & grants' },
             { href: '/admin/analytics', label: 'Analytics', icon: '📊', desc: 'Subscriptions & growth' },
+            { href: '/admin/god', label: 'God Mode', icon: '⚡', desc: 'Direct world control' },
           ].map((link) => (
             <Link
               key={link.href}

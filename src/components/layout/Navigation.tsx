@@ -46,6 +46,7 @@ const ADMIN_NAV: NavItem[] = [
   { href: "/admin/characters", label: "Characters", icon: <Users className="w-4 h-4" /> },
   { href: "/admin/tokens", label: "Tokens", icon: <Coins className="w-4 h-4" /> },
   { href: "/admin/analytics", label: "Analytics", icon: <LayoutDashboard className="w-4 h-4" /> },
+  { href: "/admin/god", label: "God Mode", icon: <Flame className="w-4 h-4" /> },
 ];
 
 export function Sidebar({ isAdmin = false }: { isAdmin?: boolean }) {
