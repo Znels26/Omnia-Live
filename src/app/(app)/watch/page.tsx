@@ -449,13 +449,48 @@ function BeingsPanel({
             <button onClick={() => onSelect(null)} className="text-fv-text-dim hover:text-fv-text text-lg">×</button>
           </div>
 
+          {/* Emotional state badge */}
+          {(() => {
+            const s = selected;
+            const emotionLabel = s.health < 30 ? { label: "Gravely ill", color: "text-red-400" }
+              : s.status === "SICK" ? { label: "Sick", color: "text-orange-400" }
+              : s.status === "DYING" ? { label: "Dying", color: "text-red-500" }
+              : s.fear > 60 ? { label: "Fearful", color: "text-blue-400" }
+              : s.happiness < 25 ? { label: "Grieving", color: "text-purple-400" }
+              : s.happiness > 70 ? { label: "Content", color: "text-green-400" }
+              : s.hope > 65 ? { label: "Hopeful", color: "text-yellow-300" }
+              : s.anger > 60 ? { label: "Wrathful", color: "text-red-300" }
+              : { label: "Stoic", color: "text-fv-text-muted" };
+            return (
+              <div className={`text-xs font-medium mb-2 ${emotionLabel.color}`}>
+                ● {emotionLabel.label}
+              </div>
+            );
+          })()}
+
+          {/* Primary goal */}
+          {selected.primaryGoal && (
+            <div className="mb-2 px-2 py-1.5 rounded bg-fv-card border border-fv-border/40">
+              <div className="text-[10px] text-fv-text-dim uppercase tracking-wider mb-0.5">Goal</div>
+              <div className="text-xs text-fv-moon font-medium leading-snug">{selected.primaryGoal}</div>
+            </div>
+          )}
+
+          {/* Current action with animated indicator */}
+          {selected.currentAction && (
+            <div className="flex items-start gap-1.5 mb-3">
+              <span className="w-1.5 h-1.5 rounded-full bg-fv-ember animate-pulse mt-1 flex-shrink-0" />
+              <span className="text-xs text-fv-ember italic leading-snug">{selected.currentAction}</span>
+            </div>
+          )}
+
           {/* Stat bars */}
           <div className="space-y-2 mb-3">
             {[
-              { label: "Health", value: selected.health, color: "#4ade80" },
+              { label: "Health", value: selected.health, color: selected.health < 30 ? "#f87171" : selected.health < 55 ? "#fb923c" : "#4ade80" },
               { label: "Hunger", value: selected.hunger, color: "#facc15" },
-              { label: "Thirst", value: selected.thirst, color: "#60a5fa" },
               { label: "Happiness", value: selected.happiness, color: "#c084fc" },
+              { label: "Fear", value: selected.fear, color: "#60a5fa" },
             ].map((stat) => (
               <div key={stat.label}>
                 <div className="flex justify-between text-xs mb-1">
@@ -464,7 +499,7 @@ function BeingsPanel({
                 </div>
                 <div className="stat-bar">
                   <div
-                    className="stat-bar-fill"
+                    className="stat-bar-fill transition-all duration-500"
                     style={{ width: `${stat.value}%`, backgroundColor: stat.color }}
                   />
                 </div>
@@ -472,8 +507,38 @@ function BeingsPanel({
             ))}
           </div>
 
-          {selected.currentAction && (
-            <div className="text-xs text-fv-ember italic">Currently: {selected.currentAction}</div>
+          {/* Relationships summary */}
+          {selected.relationships && selected.relationships.length > 0 && (
+            <div className="mb-3">
+              <div className="text-[10px] text-fv-text-dim uppercase tracking-wider mb-1">Relationships</div>
+              <div className="space-y-0.5">
+                {selected.relationships.slice(0, 3).map((rel) => (
+                  <div key={rel.beingId} className="flex items-center justify-between text-xs">
+                    <span className="text-fv-text-muted capitalize">{rel.type.toLowerCase().replace("_", " ")}</span>
+                    <div className="flex items-center gap-1">
+                      <div className="w-12 h-1 rounded-full bg-fv-border overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${Math.abs(rel.strength)}%`, backgroundColor: rel.strength > 0 ? '#4ade80' : '#f87171' }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Drives / fears */}
+          {selected.drives && selected.drives.length > 0 && (
+            <div className="mb-3 flex flex-wrap gap-1">
+              {selected.drives.slice(0, 3).map((drive, i) => (
+                <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-fv-gold/10 text-fv-gold border border-fv-gold/20">{drive}</span>
+              ))}
+              {selected.fears && selected.fears.slice(0, 2).map((fear, i) => (
+                <span key={`f${i}`} className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/20 text-red-300 border border-red-500/20">{fear}</span>
+              ))}
+            </div>
           )}
 
           <div className="flex gap-2 mt-3">

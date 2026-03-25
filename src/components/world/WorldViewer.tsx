@@ -1494,6 +1494,22 @@ function drawBeing(
     ctx.fill();
   }
 
+  // ── Emotion aura ──────────────────────────────────────────────
+  const emotionColor = being.health < 30 ? 'rgba(150,80,80,0.25)'
+    : being.fear > 60 ? 'rgba(80,80,180,0.20)'
+    : being.happiness > 70 ? 'rgba(220,180,60,0.22)'
+    : being.health < 55 ? 'rgba(120,100,60,0.18)'
+    : null;
+  if (emotionColor) {
+    const aura = ctx.createRadialGradient(cx, headY, 0, cx, headY, headR * 4.5);
+    aura.addColorStop(0, emotionColor);
+    aura.addColorStop(1, 'transparent');
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(cx, headY, headR * 4.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // ── Selection / hover ring ────────────────────────────────────
   if (isSelected) {
     ctx.strokeStyle = '#c9a050';
@@ -1557,7 +1573,8 @@ function drawBeing(
   ctx.fill();
 
   // ── Torso (filled trapezoid, wider at shoulders) ───────────────
-  ctx.fillStyle = clanColor;
+  const occupationColor = getOccupationColor(being.role);
+  ctx.fillStyle = occupationColor;
   ctx.beginPath();
   ctx.moveTo(cx - shoulderW, neckY);
   ctx.lineTo(cx + shoulderW, neckY);
@@ -1580,14 +1597,14 @@ function drawBeing(
   ctx.fill();
 
   // ── Arms (filled, animated swing) ────────────────────────────
-  const armColor = adjustBrightness(clanColor, 0.72);
+  const armColor = adjustBrightness(occupationColor, 0.72);
   const armW = 2.2 * s;
   const armH = 7.5 * s;
   const lArmSwing = armSwingPhase * 3.5 * s;
   const rArmSwing = -armSwingPhase * 3.5 * s;
 
   // Left arm (behind: drawn first)
-  ctx.fillStyle = adjustBrightness(clanColor, 0.58);
+  ctx.fillStyle = adjustBrightness(occupationColor, 0.58);
   ctx.beginPath();
   ctx.moveTo(cx - shoulderW + armW * 0.5, neckY + 1 * s);
   ctx.lineTo(cx - shoulderW - armW * 0.3, neckY + 1 * s);
@@ -1762,23 +1779,30 @@ function drawBeing(
     rrect(ctx, cx - tw / 2 - 3, labelY - 10, tw + 6, 13, 3);
     ctx.fill();
     ctx.fillStyle = being.isCore ? '#e8d5a0' : 'rgba(220,210,200,0.9)';
+    ctx.shadowColor = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur = 2;
     ctx.fillText(being.name, cx, labelY);
+    ctx.shadowBlur = 0;
     ctx.restore();
   }
 
-  // ── Action bubble ─────────────────────────────────────────────
-  if ((isSelected || isHovered) && being.currentAction) {
+  // ── Action label — always visible for core, on hover/select for others ────
+  const showAction = being.isCore ? being.currentAction : ((isSelected || isHovered) && being.currentAction) ? being.currentAction : null;
+  if (showAction) {
     const bubbleY = headY - headR - (being.isCore || isSelected ? 26 : 22) * s;
     ctx.save();
     ctx.font = `italic 8px var(--font-body, sans-serif)`;
     ctx.textAlign = 'center';
-    const action = being.currentAction.length > 24 ? being.currentAction.slice(0, 24) + '…' : being.currentAction;
+    const action = showAction.length > 28 ? showAction.slice(0, 28) + '…' : showAction;
     const tw = ctx.measureText(action).width;
     ctx.fillStyle = 'rgba(6,6,18,0.78)';
     rrect(ctx, cx - tw / 2 - 4, bubbleY - 10, tw + 8, 12, 4);
     ctx.fill();
     ctx.fillStyle = '#c8a060';
+    ctx.shadowColor = 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 2;
     ctx.fillText(action, cx, bubbleY);
+    ctx.shadowBlur = 0;
     ctx.restore();
   }
 }

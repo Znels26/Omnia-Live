@@ -114,6 +114,17 @@ function EventFeedItem({ event, compact, isNew, onClick }: EventFeedItemProps) {
   const isNotable = !isMajor && importance >= 35;
   // isMinor = !isMajor && !isNotable
 
+  // Extract quoted dialogue from description
+  const quoteRegex = /"([^"]+)"/g;
+  const description = event.description ?? '';
+  const quotes: string[] = [];
+  let qm: RegExpExecArray | null;
+  while ((qm = quoteRegex.exec(description)) !== null) {
+    quotes.push(qm[1]);
+  }
+  // Strip out quoted text to get the prose portion
+  const prosePart = description.replace(/"[^"]+"/g, '').replace(/\s{2,}/g, ' ').trim();
+
   if (isMajor) {
     return (
       <div
@@ -143,9 +154,22 @@ function EventFeedItem({ event, compact, isNew, onClick }: EventFeedItemProps) {
               <div className="font-display font-bold text-sm text-fv-moon leading-snug mb-1">
                 {event.title}
               </div>
-              <p className="text-xs text-fv-text leading-relaxed">
-                {event.description}
-              </p>
+              {quotes.length > 0 ? (
+                <div className="space-y-1">
+                  {prosePart && (
+                    <p className="text-xs text-fv-text leading-relaxed">{prosePart}</p>
+                  )}
+                  {quotes.map((q, i) => (
+                    <div key={i} className="mt-1.5 pl-2 border-l-2 border-fv-gold/40">
+                      <span className="italic text-fv-moon text-xs">&ldquo;{q}&rdquo;</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-fv-text leading-relaxed">
+                  {description}
+                </p>
+              )}
               <div className="flex items-center gap-2 mt-2">
                 <span className={cn("text-[10px] font-medium uppercase tracking-wide", categoryColor)}>
                   {event.category.toLowerCase()}
@@ -179,9 +203,22 @@ function EventFeedItem({ event, compact, isNew, onClick }: EventFeedItemProps) {
             {event.title}
           </div>
           {!compact && (
-            <p className="text-xs text-fv-text-muted mt-0.5 line-clamp-2 leading-relaxed">
-              {event.description}
-            </p>
+            quotes.length > 0 ? (
+              <div className="space-y-0.5 mt-0.5">
+                {prosePart && (
+                  <p className="text-xs text-fv-text-muted leading-relaxed line-clamp-1">{prosePart}</p>
+                )}
+                {quotes.slice(0, 2).map((q, i) => (
+                  <div key={i} className="mt-1 pl-2 border-l-2 border-fv-ember/40">
+                    <span className="italic text-fv-moon text-xs line-clamp-1">&ldquo;{q}&rdquo;</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-fv-text-muted mt-0.5 line-clamp-2 leading-relaxed">
+                {description}
+              </p>
+            )
           )}
           <div className="flex items-center gap-2 mt-1">
             <span className={cn("text-[10px] font-medium uppercase tracking-wide", categoryColor)}>
