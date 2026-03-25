@@ -40,6 +40,13 @@ interface Bird {
   phase: number; size: number;
 }
 
+interface Cloud {
+  x: number; y: number;
+  speed: number;
+  puffs: Array<{ dx: number; dy: number; r: number }>;
+  width: number;
+}
+
 interface CanvasNote {
   id: string; text: string;
   x: number; y: number;
@@ -68,6 +75,7 @@ export function WorldViewer({
   const [hoveredPos, setHoveredPos] = useState({ x: 0, y: 0 });
   const worldStateRef = useRef<WorldState | null>(null);
   const birdsRef = useRef<Bird[]>([]);
+  const cloudsRef = useRef<Cloud[]>([]);
   const posCacheRef = useRef<Map<string, { cx: number; cy: number; tx: number; ty: number }>>(new Map());
   const notesRef = useRef<CanvasNote[]>([]);
   const knownEventIdsRef = useRef<Set<string>>(new Set());
@@ -159,11 +167,14 @@ export function WorldViewer({
       ctx.fill();
     }
 
+    // ── Clouds ────────────────────────────────────────────────────
+    drawClouds(ctx, cloudsRef.current, W, H, scaleX, scaleY, ambientLight, worldTime);
+
     // ── Birds ─────────────────────────────────────────────────────
     drawBirds(ctx, birdsRef.current, W, H, scaleX, scaleY, t, ambientLight);
 
     // ── Mountains (background) ───────────────────────────────────
-    drawMountains(ctx, W, H, scaleX, scaleY, ambientLight);
+    drawMountains(ctx, W, H, scaleX, scaleY, ambientLight, worldTime);
 
     // ── Dawn / Dusk horizon glow ──────────────────────────────────
     const horizonY = H * 0.42;
@@ -185,6 +196,9 @@ export function WorldViewer({
       }
     }
 
+    // ── Rolling hill layers ───────────────────────────────────────
+    drawHillLayers(ctx, W, H, scaleX, scaleY, ambientLight, worldTime);
+
     // ── Ground plane ──────────────────────────────────────────────
     {
       const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
@@ -199,6 +213,9 @@ export function WorldViewer({
       ctx.fillStyle = groundGrad;
       ctx.fillRect(0, horizonY, W, H - horizonY);
     }
+
+    // ── Ground texture ────────────────────────────────────────────
+    drawGroundTexture(ctx, W, H, scaleX, scaleY, ambientLight);
 
     // ── Perspective depth grid (isometric illusion) ───────────────
     {
@@ -294,6 +311,11 @@ export function WorldViewer({
       }
     }
 
+    // ── Atmospheric particles (fireflies / dust) ──────────────────
+    if (state?.settlements) {
+      drawAtmosphericParticles(ctx, state.settlements, W, H, scaleX, scaleY, ambientLight, t, worldTime);
+    }
+
     // ── Canvas Event Notifications ────────────────────────────────
     notesRef.current = notesRef.current.filter(n => n.opacity > 0.02);
     for (const note of notesRef.current) {
@@ -368,6 +390,27 @@ export function WorldViewer({
       phase: Math.random() * Math.PI * 2,
       size: 2.5 + Math.random() * 1.5,
     }));
+  }, []);
+
+  useEffect(() => {
+    cloudsRef.current = Array.from({ length: 7 }, (_, i) => {
+      const w = 70 + Math.random() * 130;
+      const puffCount = 4 + Math.floor(Math.random() * 5);
+      return {
+        x: Math.random() * WORLD_WIDTH,
+        y: 18 + Math.random() * 95,
+        width: w,
+        speed: 0.06 + Math.random() * 0.1,
+        puffs: Array.from({ length: puffCount }, (_, j) => {
+          const spread = w * 0.45;
+          return {
+            dx: (j / puffCount - 0.5) * spread * 2 + (Math.random() - 0.5) * 20,
+            dy: (Math.random() - 0.5) * 18,
+            r: 12 + Math.random() * 18,
+          };
+        }),
+      };
+    });
   }, []);
 
   useEffect(() => {
@@ -572,8 +615,12 @@ function drawMountains(
   H: number,
   scaleX: number,
   scaleY: number,
-  ambientLight: number
+  ambientLight: number,
+  worldTime: number
 ) {
+  const isDawn = worldTime >= 5 && worldTime < 9;
+  const isDusk = worldTime >= 17 && worldTime < 21;
+
   // Far mountain range
   const farPeaks: [number, number][] = [
     [0, 0.45], [0.05, 0.25], [0.12, 0.15], [0.2, 0.21],
@@ -581,6 +628,20 @@ function drawMountains(
     [0.67, 0.08], [0.76, 0.16], [0.85, 0.22], [0.93, 0.13],
     [1, 0.28],
   ];
+
+  // Atmospheric haze behind far mountains (dawn = warm, dusk = orange/purple)
+  {
+    const hazeColor = isDawn ? 'rgba(255,160,80,' : isDusk ? 'rgba(200,80,30,' : 'rgba(80,90,120,';
+    const hazeAlpha = (isDawn || isDusk) ? 0.18 * ambientLight : 0.08 * ambientLight;
+    if (hazeAlpha > 0.005) {
+      const hg = ctx.createLinearGradient(0, H * 0.08, 0, H * 0.45);
+      hg.addColorStop(0, `${hazeColor}0)`);
+      hg.addColorStop(0.6, `${hazeColor}${hazeAlpha})`);
+      hg.addColorStop(1, `${hazeColor}0)`);
+      ctx.fillStyle = hg;
+      ctx.fillRect(0, H * 0.08, W, H * 0.37);
+    }
+  }
 
   ctx.fillStyle = `rgba(38, 36, 52, ${0.55 * ambientLight + 0.2})`;
   ctx.beginPath();
@@ -590,7 +651,7 @@ function drawMountains(
   ctx.closePath();
   ctx.fill();
 
-  // Snow caps on far peaks
+  // Snow caps
   ctx.fillStyle = `rgba(230, 228, 240, ${0.4 * ambientLight + 0.1})`;
   for (const [px, py] of farPeaks.slice(1, -1)) {
     if (py < 0.22) {
@@ -620,7 +681,7 @@ function drawMountains(
   ctx.closePath();
   ctx.fill();
 
-  // Snow caps on near peaks
+  // Snow caps
   ctx.fillStyle = `rgba(220, 218, 235, ${0.35 * ambientLight + 0.08})`;
   for (const [px, py] of nearPeaks.slice(1, -1)) {
     if (py < 0.3) {
@@ -634,6 +695,15 @@ function drawMountains(
       ctx.fill();
     }
   }
+
+  // Atmospheric fade band at mountain base (aerial perspective)
+  const fadeColor = isDawn ? 'rgba(255,180,100,' : isDusk ? 'rgba(180,80,30,' : 'rgba(60,80,100,';
+  const mg = ctx.createLinearGradient(0, H * 0.38, 0, H * 0.48);
+  mg.addColorStop(0, `${fadeColor}0)`);
+  mg.addColorStop(0.5, `${fadeColor}${0.12 * ambientLight})`);
+  mg.addColorStop(1, `${fadeColor}0)`);
+  ctx.fillStyle = mg;
+  ctx.fillRect(0, H * 0.38, W, H * 0.1);
 }
 
 function drawRegion(
@@ -648,93 +718,267 @@ function drawRegion(
   const y = region.y * scaleY;
   const w = region.width * scaleX;
   const h = region.height * scaleY;
-
-  // Terrain base
-  const baseColor = region.color;
-  const lightColor = adjustBrightness(baseColor, ambientLight * 0.8 + 0.1);
-
-  ctx.globalAlpha = 0.6;
-  ctx.fillStyle = lightColor;
-  ctx.beginPath();
-
-  // Rounded irregular shape
   const rx = w * 0.5;
   const ry = h * 0.5;
-  ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-  ctx.fill();
+  const s = Math.min(scaleX, scaleY);
 
-  // Forest: proper pine tree silhouettes
+  // ── FOREST ───────────────────────────────────────────────────────
   if (region.type === "FOREST") {
-    const treePositions: [number, number][] = [];
-    for (let i = 0; i < 18; i++) {
-      const angle = (i / 18) * Math.PI * 2 + i * 0.3;
-      const dist = (0.2 + (i % 3) * 0.25) * Math.min(rx, ry);
-      treePositions.push([
-        x + Math.cos(angle) * dist,
-        y + Math.sin(angle) * dist * 0.6,
-      ]);
+    // Dark forest floor
+    ctx.globalAlpha = 0.55;
+    const floorGrad = ctx.createRadialGradient(x, y, 0, x, y, rx);
+    floorGrad.addColorStop(0, '#1a3a18');
+    floorGrad.addColorStop(1, '#0e2010');
+    ctx.fillStyle = floorGrad;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dappled sunlight patches on forest floor
+    ctx.globalAlpha = 0.06 * ambientLight;
+    for (let i = 0; i < 8; i++) {
+      const pr = pseudoRand(i * 1.7 + region.x * 0.01);
+      const pa = pseudoRand(i * 2.3 + region.y * 0.01);
+      const lx = x + (pr - 0.5) * rx * 1.4;
+      const ly = y + (pa - 0.5) * ry * 1.2;
+      const lg = ctx.createRadialGradient(lx, ly, 0, lx, ly, 14 * s);
+      lg.addColorStop(0, 'rgba(180,220,80,1)');
+      lg.addColorStop(1, 'transparent');
+      ctx.fillStyle = lg;
+      ctx.beginPath();
+      ctx.arc(lx, ly, 14 * s, 0, Math.PI * 2);
+      ctx.fill();
     }
-    for (const [tx, ty] of treePositions) {
-      const treeH = (12 + ((tx * 7 + ty * 3) % 6)) * scaleX;
-      const sway = Math.sin(t * 0.8 + tx * 0.05) * 0.5 * scaleX;
+    ctx.globalAlpha = 1;
+
+    // Trees — back row (smaller, lighter)
+    const backSeeds = Array.from({ length: 16 }, (_, i) => {
+      const angle = (i / 16) * Math.PI * 2 + pseudoRand(i * 3.1) * 0.5;
+      const dist = (0.35 + pseudoRand(i * 1.9) * 0.35) * Math.min(rx, ry) * 0.85;
+      return [x + Math.cos(angle) * dist, y + Math.sin(angle) * dist * 0.65] as [number, number];
+    });
+
+    for (const [tx, ty] of backSeeds) {
+      const treeH = (8 + pseudoRand(tx * 0.1 + ty * 0.07) * 7) * s;
+      const sway = Math.sin(t * 0.7 + tx * 0.08) * 1.0 * s;
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = '#12301a';
+      ctx.beginPath();
+      ctx.arc(tx + sway, ty - treeH * 0.55, treeH * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = '#163d20';
+      ctx.beginPath();
+      ctx.arc(tx + sway * 0.7, ty - treeH * 0.75, treeH * 0.38, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Trees — front row (larger, darker, shadow-casting)
+    const frontSeeds = Array.from({ length: 10 }, (_, i) => {
+      const angle = (i / 10) * Math.PI * 2 + pseudoRand(i * 7.3) * 0.3;
+      const dist = (0.6 + pseudoRand(i * 2.7) * 0.3) * Math.min(rx, ry) * 0.9;
+      return [x + Math.cos(angle) * dist, y + Math.sin(angle) * dist * 0.65] as [number, number];
+    });
+
+    for (const [tx, ty] of frontSeeds) {
+      const treeH = (12 + pseudoRand(tx * 0.09 + ty * 0.05) * 9) * s;
+      const sway = Math.sin(t * 0.6 + tx * 0.06) * 1.5 * s;
       // Trunk
-      ctx.globalAlpha = 0.45;
-      ctx.fillStyle = "#3d2b1a";
-      ctx.fillRect(tx - 1.2 * scaleX + sway * 0.3, ty, 2.4 * scaleX, treeH * 0.35);
-      // Layers of foliage
-      for (let layer = 0; layer < 3; layer++) {
-        const ly = ty - layer * treeH * 0.28;
-        const lw = treeH * (0.7 - layer * 0.18);
-        ctx.globalAlpha = 0.5 - layer * 0.05;
-        ctx.fillStyle = layer === 0 ? "#1a4220" : layer === 1 ? "#1e5228" : "#246030";
+      ctx.globalAlpha = 0.7;
+      ctx.fillStyle = '#2a1a0e';
+      ctx.fillRect(tx - 1.5 * s + sway * 0.2, ty, 3 * s, treeH * 0.4);
+      // Shadow on ground
+      ctx.globalAlpha = 0.2;
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+      ctx.beginPath();
+      ctx.ellipse(tx + 8 * s, ty + 3 * s, treeH * 0.35, treeH * 0.12, -0.3, 0, Math.PI * 2);
+      ctx.fill();
+      // Canopy — 3 overlapping blobs
+      const canopyColors = ['#0e2a12', '#133218', '#183d1e'];
+      for (let ci = 0; ci < 3; ci++) {
+        const offX = (pseudoRand(tx * 0.1 + ci) - 0.5) * treeH * 0.35;
+        const offY = -treeH * (0.5 + ci * 0.22);
+        const cr = treeH * (0.52 - ci * 0.08);
+        ctx.globalAlpha = 0.75 - ci * 0.1;
+        ctx.fillStyle = canopyColors[ci];
         ctx.beginPath();
-        ctx.moveTo(tx + sway, ly - treeH * 0.5);
-        ctx.lineTo(tx - lw * 0.5 + sway * 0.5, ly);
-        ctx.lineTo(tx + lw * 0.5 + sway * 0.5, ly);
-        ctx.closePath();
+        ctx.arc(tx + offX + sway, ty + offY, cr, 0, Math.PI * 2);
         ctx.fill();
       }
     }
+    ctx.globalAlpha = 1;
   }
 
-  // River effect for river basin
-  if (region.type === "RIVER_BASIN") {
-    ctx.globalAlpha = 0.55;
-    const riverGrad = ctx.createLinearGradient(x - rx * 0.3, y, x + rx * 0.3, y);
-    riverGrad.addColorStop(0, "#2a6ab5");
-    riverGrad.addColorStop(0.5, "#4a9fd9");
-    riverGrad.addColorStop(1, "#2a6ab5");
-    ctx.strokeStyle = riverGrad;
-    ctx.lineWidth = 5 * scaleX;
-    ctx.lineCap = "round";
-    const flow = Math.sin(t * 0.5) * 5 * scaleX;
+  // ── RIVER / WATER ─────────────────────────────────────────────────
+  else if (region.type === "RIVER_BASIN" || region.type === "LAKE" || region.type === "MARSH") {
+    // Water base
+    ctx.globalAlpha = 0.65;
+    const waterGrad = ctx.createRadialGradient(x, y, 0, x, y, rx);
+    waterGrad.addColorStop(0, '#3a8acc');
+    waterGrad.addColorStop(0.6, '#2a6aaa');
+    waterGrad.addColorStop(1, '#1a4a80');
+    ctx.fillStyle = waterGrad;
     ctx.beginPath();
-    ctx.moveTo(x - rx * 0.4 + flow, y - h * 0.25);
-    ctx.bezierCurveTo(
-      x - rx * 0.1 + flow, y + h * 0.05,
-      x + rx * 0.1 - flow, y + h * 0.15,
-      x + rx * 0.4 - flow, y + h * 0.3
-    );
-    ctx.stroke();
-    // Shimmer
-    ctx.globalAlpha = 0.2;
-    ctx.strokeStyle = "rgba(200,230,255,0.8)";
-    ctx.lineWidth = 2 * scaleX;
+    ctx.ellipse(x, y, rx, ry * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Animated flow lines
+    ctx.globalAlpha = 0.3;
+    ctx.strokeStyle = 'rgba(120,190,255,0.8)';
+    ctx.lineWidth = 1.5 * s;
+    ctx.lineCap = 'round';
+    for (let fi = 0; fi < 4; fi++) {
+      const offset = (fi / 4) * ry * 0.8 - ry * 0.4;
+      const phase = t * 0.4 + fi * 0.7;
+      ctx.beginPath();
+      ctx.moveTo(x - rx * 0.7, y + offset);
+      ctx.bezierCurveTo(
+        x - rx * 0.3, y + offset + Math.sin(phase) * 6 * s,
+        x + rx * 0.3, y + offset + Math.sin(phase + 1.2) * 6 * s,
+        x + rx * 0.7, y + offset + Math.sin(phase + 2.4) * 4 * s
+      );
+      ctx.stroke();
+    }
+
+    // Caustic sparkles — bright shimmer dots on surface
+    ctx.globalAlpha = 0.5 * ambientLight;
+    for (let ci = 0; ci < 12; ci++) {
+      const seed1 = ci * 1.37;
+      const seed2 = ci * 2.71;
+      const sparkX = x + (pseudoRand(seed1 + Math.floor(t * 0.3)) - 0.5) * rx * 1.4;
+      const sparkY = y + (pseudoRand(seed2 + Math.floor(t * 0.3)) - 0.5) * ry * 1.0;
+      const flicker = 0.3 + 0.7 * Math.abs(Math.sin(t * 4 + ci * 0.9));
+      ctx.fillStyle = `rgba(200, 240, 255, ${flicker * 0.8})`;
+      ctx.beginPath();
+      ctx.arc(sparkX, sparkY, (0.8 + flicker * 1.2) * s, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Foam edge highlight
+    ctx.globalAlpha = 0.15 * ambientLight;
+    ctx.strokeStyle = 'rgba(220,240,255,1)';
+    ctx.lineWidth = 2 * s;
     ctx.beginPath();
-    ctx.moveTo(x - rx * 0.38 + flow, y - h * 0.22);
-    ctx.bezierCurveTo(
-      x - rx * 0.08 + flow, y + h * 0.06,
-      x + rx * 0.08 - flow, y + h * 0.17,
-      x + rx * 0.38 - flow, y + h * 0.28
-    );
+    ctx.ellipse(x, y, rx * 0.92, ry * 0.65, 0, 0, Math.PI * 2);
     ctx.stroke();
+
+    ctx.globalAlpha = 1;
   }
 
-  ctx.globalAlpha = 1;
+  // ── COAST / SHORE ─────────────────────────────────────────────────
+  else if (region.type === "COAST" || region.type === "BEACH") {
+    // Sand base
+    ctx.globalAlpha = 0.5;
+    ctx.fillStyle = '#c8a86a';
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Ocean water offset toward one edge
+    ctx.globalAlpha = 0.6;
+    const wg = ctx.createLinearGradient(x - rx, y, x + rx * 0.3, y);
+    wg.addColorStop(0, '#1a5a9a');
+    wg.addColorStop(0.5, '#2a7ac8');
+    wg.addColorStop(1, 'transparent');
+    ctx.fillStyle = wg;
+    ctx.beginPath();
+    ctx.ellipse(x - rx * 0.2, y, rx * 0.85, ry * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Wave lines
+    ctx.globalAlpha = 0.35;
+    ctx.strokeStyle = 'rgba(200,240,255,0.9)';
+    ctx.lineWidth = 1.5 * s;
+    for (let wi = 0; wi < 3; wi++) {
+      const wt = (t * 0.6 + wi * 0.4) % 1;
+      const wy = y - ry * 0.3 + wi * ry * 0.25;
+      const alpha = Math.sin(wt * Math.PI);
+      ctx.globalAlpha = 0.3 * alpha;
+      ctx.beginPath();
+      ctx.moveTo(x - rx * 0.6, wy);
+      ctx.bezierCurveTo(x - rx * 0.2, wy - 4 * s, x + rx * 0.2, wy + 4 * s, x + rx * 0.6, wy);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── MOUNTAINS / HIGHLANDS ─────────────────────────────────────────
+  else if (region.type === "MOUNTAINS" || region.type === "HIGHLANDS") {
+    ctx.globalAlpha = 0.5;
+    const rockGrad = ctx.createRadialGradient(x - rx * 0.3, y - ry * 0.3, 0, x, y, rx);
+    rockGrad.addColorStop(0, adjustBrightness(region.color, ambientLight * 0.9 + 0.3));
+    rockGrad.addColorStop(1, adjustBrightness(region.color, ambientLight * 0.5 + 0.1));
+    ctx.fillStyle = rockGrad;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Rocky facets
+    ctx.globalAlpha = 0.35;
+    for (let ri = 0; ri < 8; ri++) {
+      const angle = (ri / 8) * Math.PI * 2;
+      const dist = (0.2 + pseudoRand(ri * 1.3) * 0.5) * Math.min(rx, ry) * 0.7;
+      const px = x + Math.cos(angle) * dist;
+      const py = y + Math.sin(angle) * dist * 0.65;
+      const faceW = (8 + pseudoRand(ri * 2.1) * 12) * s;
+      const faceH = (6 + pseudoRand(ri * 3.3) * 8) * s;
+      ctx.fillStyle = ri % 2 === 0
+        ? adjustBrightness(region.color, ambientLight * 0.4 + 0.1)
+        : adjustBrightness(region.color, ambientLight * 0.8 + 0.2);
+      ctx.beginPath();
+      ctx.ellipse(px, py, faceW, faceH, angle, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── PLAINS / VALLEY / DEFAULT ──────────────────────────────────────
+  else {
+    ctx.globalAlpha = 0.45;
+    const lightColor = adjustBrightness(region.color, ambientLight * 0.8 + 0.15);
+    const plainGrad = ctx.createRadialGradient(x, y - ry * 0.2, 0, x, y, rx);
+    plainGrad.addColorStop(0, lightenColor(region.color, 0.2 * ambientLight));
+    plainGrad.addColorStop(1, lightColor);
+    ctx.fillStyle = plainGrad;
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Scattered grass tufts
+    ctx.globalAlpha = 0.22 * ambientLight;
+    ctx.strokeStyle = adjustBrightness(region.color, 0.7);
+    ctx.lineWidth = 0.9 * s;
+    for (let gi = 0; gi < 20; gi++) {
+      const gx = x + (pseudoRand(gi * 1.7 + region.x) - 0.5) * rx * 1.5;
+      const gy = y + (pseudoRand(gi * 2.3 + region.y) - 0.5) * ry * 1.3;
+      const gh = (3 + pseudoRand(gi * 3.1) * 3) * s;
+      ctx.beginPath();
+      ctx.moveTo(gx - 2 * s, gy);
+      ctx.lineTo(gx, gy - gh);
+      ctx.moveTo(gx + 2 * s, gy);
+      ctx.lineTo(gx, gy - gh);
+      ctx.stroke();
+    }
+
+    // Wildflower dots
+    if (region.fertility > 0.5) {
+      const flowerColors = ['rgba(255,200,80,0.7)', 'rgba(200,80,200,0.6)', 'rgba(255,255,255,0.5)'];
+      for (let fi = 0; fi < 12; fi++) {
+        const fx = x + (pseudoRand(fi * 5.1 + region.x) - 0.5) * rx * 1.4;
+        const fy = y + (pseudoRand(fi * 4.7 + region.y) - 0.5) * ry * 1.2;
+        ctx.globalAlpha = 0.4 * ambientLight;
+        ctx.fillStyle = flowerColors[fi % flowerColors.length];
+        ctx.beginPath();
+        ctx.arc(fx, fy, 1.5 * s, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // Region label
-  ctx.fillStyle = `rgba(220, 210, 200, ${0.5 * ambientLight + 0.1})`;
-  ctx.font = `${10 * scaleX}px var(--font-display, Georgia, serif)`;
+  ctx.fillStyle = `rgba(220, 210, 200, ${0.45 * ambientLight + 0.15})`;
+  ctx.font = `italic ${9 * Math.min(scaleX, scaleY)}px var(--font-display, Georgia, serif)`;
   ctx.textAlign = "center";
   ctx.fillText(region.name, x, y + 4 * scaleY);
 }
@@ -823,6 +1067,38 @@ function drawSettlement(
     ctx.beginPath();
     ctx.arc(x, y, glowR, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  // Settlement ground shadow
+  ctx.save();
+  ctx.globalAlpha = 0.18 * ambientLight;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
+  ctx.beginPath();
+  ctx.ellipse(x + size * 0.4, y + size * 0.9, size * 1.6, size * 0.4, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Palisade fence ring for village+
+  if (settlement.type === 'VILLAGE' || settlement.type === 'TOWN' || settlement.type === 'CITY') {
+    const fenceR = size * 1.55;
+    const postCount = settlement.type === 'CITY' ? 28 : settlement.type === 'TOWN' ? 22 : 16;
+    const postH = size * 0.55;
+    const postW = size * 0.09;
+    ctx.save();
+    ctx.globalAlpha = 0.55 + ambientLight * 0.2;
+    for (let pi = 0; pi < postCount; pi++) {
+      const angle = (pi / postCount) * Math.PI * 2;
+      const px = x + Math.cos(angle) * fenceR;
+      const py = y + Math.sin(angle) * fenceR * 0.55;
+      ctx.fillStyle = adjustBrightness(clanColor, 0.4 + ambientLight * 0.25);
+      ctx.fillRect(px - postW / 2, py - postH, postW, postH);
+      // Post shadow
+      ctx.globalAlpha = 0.15;
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+      ctx.fillRect(px - postW / 2 + 1.5, py - postH + 2, postW * 0.8, postH);
+      ctx.globalAlpha = 0.55 + ambientLight * 0.2;
+    }
+    ctx.restore();
   }
 
   const wallColor = lightenColor(clanColor, 0.2 * ambientLight + 0.05);
@@ -996,266 +1272,585 @@ function drawBeing(
   drawY?: number
 ) {
   const worldDrawY = drawY ?? being.y;
-  const x = (drawX ?? being.x) * scaleX;
-  const y = worldDrawY * scaleY;
-  const seed = being.x * 0.37 + being.y * 0.19;
-  const walkCycle = t * 2.5 + seed;
-  const bobY = Math.sin(walkCycle) * 1.2 * scaleY;
-  const legSwing = Math.sin(walkCycle) * 0.35;
-  const armSwing = Math.sin(walkCycle + Math.PI) * 0.3;
+  const cx = (drawX ?? being.x) * scaleX;
+  const baseY = worldDrawY * scaleY;
 
-  // Depth-based scale: beings near horizon (y≈0.42H) appear small,
-  // beings in foreground (y≈H) appear large — isometric perspective
-  const depthFactor = Math.max(0.45, Math.min(1.55,
+  // Per-being deterministic walk offset so they don't all step in sync
+  const seed = being.id.charCodeAt(0) * 0.31 + being.id.charCodeAt(1) * 0.17;
+  const walkCycle = t * 2.2 + seed;
+  const bob = Math.sin(walkCycle) * 1.0;
+  const legSwing = Math.sin(walkCycle);
+  const armSwingPhase = Math.sin(walkCycle + Math.PI * 0.8);
+
+  // Depth-based scale for perspective
+  const depthFactor = Math.max(0.45, Math.min(1.6,
     0.5 + (worldDrawY - WORLD_HEIGHT * 0.40) / (WORLD_HEIGHT * 0.55)
   ));
-  const s = (being.isCore ? 1.45 : 1.0) * Math.min(scaleX, scaleY) * depthFactor;
+  const s = (being.isCore ? 1.5 : 1.0) * Math.min(scaleX, scaleY) * depthFactor;
 
-  // Head radius, body measurements
-  const headR = 4 * s;
-  const shoulderY = y + bobY + headR * 2.2;
-  const hipY = shoulderY + 9 * s;
+  // ── Measurements ──────────────────────────────────────────────
+  const headR   = 4.5 * s;
+  const headY   = baseY + bob * scaleY - headR * 0.5;
+  const neckY   = headY + headR * 1.75;
+  const hipY    = neckY + 10 * s;
   const groundY = hipY + 9 * s;
-  const cx = x;
-  const headY = y + bobY;
+  const shoulderW = 5.5 * s;
+  const hipW      = 4.0 * s;
+  const legW      = 2.0 * s;
 
-  // Glow for core beings
+  const alpha = Math.min(1, 0.55 + ambientLight * 0.45);
+
+  // ── Core glow ─────────────────────────────────────────────────
   if (being.isCore) {
-    const glow = ctx.createRadialGradient(cx, headY, 0, cx, headY, headR * 5);
-    glow.addColorStop(0, `${clanColor}55`);
-    glow.addColorStop(1, "transparent");
+    const glow = ctx.createRadialGradient(cx, headY, 0, cx, headY, headR * 5.5);
+    glow.addColorStop(0, `${clanColor}60`);
+    glow.addColorStop(1, 'transparent');
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(cx, headY, headR * 5, 0, Math.PI * 2);
+    ctx.arc(cx, headY, headR * 5.5, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Selection ring (ground)
+  // ── Selection / hover ring ────────────────────────────────────
   if (isSelected) {
-    ctx.strokeStyle = "#c9a050";
-    ctx.lineWidth = 1.5 * s;
+    ctx.strokeStyle = '#c9a050';
+    ctx.lineWidth = 2 * s;
     ctx.beginPath();
-    ctx.ellipse(cx, groundY, headR * 2.5, headR * 0.6, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, groundY + 1.5 * s, headR * 3, headR * 0.65, 0, 0, Math.PI * 2);
     ctx.stroke();
-  }
-
-  // Hover ring (ground)
-  if (isHovered && !isSelected) {
-    ctx.strokeStyle = "rgba(255,255,255,0.4)";
-    ctx.lineWidth = 1 * s;
+  } else if (isHovered) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.2 * s;
     ctx.beginPath();
-    ctx.ellipse(cx, groundY, headR * 2.2, headR * 0.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, groundY + 1.5 * s, headR * 2.7, headR * 0.55, 0, 0, Math.PI * 2);
     ctx.stroke();
   }
 
   ctx.save();
-  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4);
+  ctx.globalAlpha = alpha;
 
-  const strokeW = Math.max(1.2, 1.5 * s);
-  ctx.lineWidth = strokeW;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-
-  // Shadow / ground dot
-  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4) * 0.3;
-  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  // ── Ground shadow (ellipse under feet) ────────────────────────
+  ctx.globalAlpha = alpha * 0.28;
+  ctx.fillStyle = 'rgba(0,0,0,0.8)';
   ctx.beginPath();
-  ctx.ellipse(cx, groundY + 1 * s, headR * 1.6, headR * 0.35, 0, 0, Math.PI * 2);
+  ctx.ellipse(cx, groundY + 1.8 * s, headR * 2.4, headR * 0.42, 0, 0, Math.PI * 2);
   ctx.fill();
-  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4);
+  ctx.globalAlpha = alpha;
 
-  // Legs
-  ctx.strokeStyle = adjustBrightness(clanColor, 0.65);
+  // ── Legs (filled tapered quads, animated) ─────────────────────
+  const lSwing = legSwing * 3.5 * s;
+  const rSwing = -legSwing * 3.5 * s;
+  const legColor = adjustBrightness(clanColor, 0.55);
+  const bootColor = adjustBrightness(clanColor, 0.35);
+
   // Left leg
+  ctx.fillStyle = legColor;
   ctx.beginPath();
-  ctx.moveTo(cx - 2 * s, hipY);
-  const lLegMidX = cx - 2 * s + Math.sin(legSwing) * 3 * s;
-  const lLegMidY = hipY + 5 * s;
-  ctx.quadraticCurveTo(lLegMidX, lLegMidY, cx - 2 * s + Math.sin(legSwing) * 4 * s, groundY);
-  ctx.stroke();
+  ctx.moveTo(cx - hipW * 0.8 + lSwing * 0.15, hipY);
+  ctx.lineTo(cx - hipW * 0.3 + lSwing * 0.15, hipY);
+  ctx.lineTo(cx - legW * 0.3 + lSwing, groundY);
+  ctx.lineTo(cx - legW * 1.8 + lSwing, groundY);
+  ctx.closePath();
+  ctx.fill();
+  // Left boot
+  ctx.fillStyle = bootColor;
+  ctx.beginPath();
+  ctx.ellipse(cx - legW * 0.8 + lSwing, groundY + 1.2 * s, 3.2 * s, 1.6 * s, 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
   // Right leg
+  ctx.fillStyle = legColor;
   ctx.beginPath();
-  ctx.moveTo(cx + 2 * s, hipY);
-  const rLegMidX = cx + 2 * s + Math.sin(-legSwing) * 3 * s;
-  ctx.quadraticCurveTo(rLegMidX, hipY + 5 * s, cx + 2 * s + Math.sin(-legSwing) * 4 * s, groundY);
-  ctx.stroke();
+  ctx.moveTo(cx + hipW * 0.3 + rSwing * 0.15, hipY);
+  ctx.lineTo(cx + hipW * 0.8 + rSwing * 0.15, hipY);
+  ctx.lineTo(cx + legW * 1.8 + rSwing, groundY);
+  ctx.lineTo(cx + legW * 0.3 + rSwing, groundY);
+  ctx.closePath();
+  ctx.fill();
+  // Right boot
+  ctx.fillStyle = bootColor;
+  ctx.beginPath();
+  ctx.ellipse(cx + legW * 0.8 + rSwing, groundY + 1.2 * s, 3.2 * s, 1.6 * s, -0.1, 0, Math.PI * 2);
+  ctx.fill();
 
-  // Body
-  ctx.strokeStyle = clanColor;
+  // ── Torso (filled trapezoid, wider at shoulders) ───────────────
+  ctx.fillStyle = clanColor;
   ctx.beginPath();
-  ctx.moveTo(cx, shoulderY);
-  ctx.lineTo(cx, hipY);
-  ctx.stroke();
+  ctx.moveTo(cx - shoulderW, neckY);
+  ctx.lineTo(cx + shoulderW, neckY);
+  ctx.lineTo(cx + hipW, hipY);
+  ctx.lineTo(cx - hipW, hipY);
+  ctx.closePath();
+  ctx.fill();
 
-  // Arms
-  ctx.strokeStyle = adjustBrightness(clanColor, 0.75);
-  const armLen = 6 * s;
-  // Left arm
+  // Torso shading overlay
+  const torsoGrad = ctx.createLinearGradient(cx - shoulderW, neckY, cx + shoulderW, hipY);
+  torsoGrad.addColorStop(0, 'rgba(255,255,255,0.18)');
+  torsoGrad.addColorStop(1, 'rgba(0,0,0,0.22)');
+  ctx.fillStyle = torsoGrad;
   ctx.beginPath();
-  ctx.moveTo(cx, shoulderY + 2 * s);
-  ctx.lineTo(cx - armLen + Math.sin(armSwing) * 3 * s, shoulderY + armLen + Math.sin(armSwing) * 2 * s);
-  ctx.stroke();
+  ctx.moveTo(cx - shoulderW, neckY);
+  ctx.lineTo(cx + shoulderW, neckY);
+  ctx.lineTo(cx + hipW, hipY);
+  ctx.lineTo(cx - hipW, hipY);
+  ctx.closePath();
+  ctx.fill();
+
+  // ── Arms (filled, animated swing) ────────────────────────────
+  const armColor = adjustBrightness(clanColor, 0.72);
+  const armW = 2.2 * s;
+  const armH = 7.5 * s;
+  const lArmSwing = armSwingPhase * 3.5 * s;
+  const rArmSwing = -armSwingPhase * 3.5 * s;
+
+  // Left arm (behind: drawn first)
+  ctx.fillStyle = adjustBrightness(clanColor, 0.58);
+  ctx.beginPath();
+  ctx.moveTo(cx - shoulderW + armW * 0.5, neckY + 1 * s);
+  ctx.lineTo(cx - shoulderW - armW * 0.3, neckY + 1 * s);
+  ctx.lineTo(cx - shoulderW - armW + lArmSwing, neckY + armH);
+  ctx.lineTo(cx - shoulderW + armW * 0.8 + lArmSwing * 0.3, neckY + armH);
+  ctx.closePath();
+  ctx.fill();
+
   // Right arm
+  ctx.fillStyle = armColor;
   ctx.beginPath();
-  ctx.moveTo(cx, shoulderY + 2 * s);
-  ctx.lineTo(cx + armLen + Math.sin(-armSwing) * 3 * s, shoulderY + armLen + Math.sin(-armSwing) * 2 * s);
-  ctx.stroke();
+  ctx.moveTo(cx + shoulderW - armW * 0.5, neckY + 1 * s);
+  ctx.lineTo(cx + shoulderW + armW * 0.3, neckY + 1 * s);
+  ctx.lineTo(cx + shoulderW + armW + rArmSwing, neckY + armH);
+  ctx.lineTo(cx + shoulderW - armW * 0.8 + rArmSwing * 0.3, neckY + armH);
+  ctx.closePath();
+  ctx.fill();
 
-  // Head
-  const headColor = lightenColor(clanColor, 0.4);
-  ctx.fillStyle = headColor;
-  ctx.strokeStyle = adjustBrightness(clanColor, 0.5);
-  ctx.lineWidth = strokeW * 0.8;
+  // ── Head (filled circle with gradient shading) ────────────────
+  const skinBase = lightenColor(clanColor, 0.55);
+  const skinHighlight = lightenColor(clanColor, 0.75);
+  const headGrad = ctx.createRadialGradient(
+    cx - headR * 0.25, headY - headR * 0.3, 0,
+    cx, headY, headR
+  );
+  headGrad.addColorStop(0, skinHighlight);
+  headGrad.addColorStop(0.65, skinBase);
+  headGrad.addColorStop(1, adjustBrightness(clanColor, 0.45));
+  ctx.fillStyle = headGrad;
   ctx.beginPath();
   ctx.arc(cx, headY, headR, 0, Math.PI * 2);
   ctx.fill();
+
+  // Thin outline
+  ctx.strokeStyle = adjustBrightness(clanColor, 0.38);
+  ctx.lineWidth = 0.7 * s;
   ctx.stroke();
 
-  // Eyes (tiny dots for core beings)
-  if (being.isCore) {
-    ctx.fillStyle = "rgba(255,255,255,0.85)";
-    ctx.beginPath();
-    ctx.arc(cx - headR * 0.32, headY - headR * 0.1, headR * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(cx + headR * 0.32, headY - headR * 0.1, headR * 0.2, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  // ── Hair (cap on top of head) ─────────────────────────────────
+  const hairColor = adjustBrightness(clanColor, 0.28);
+  ctx.fillStyle = hairColor;
+  ctx.beginPath();
+  ctx.arc(cx, headY - headR * 0.15, headR * 0.93, Math.PI * 1.08, Math.PI * 1.92);
+  ctx.fill();
+
+  // ── Eyes (two small dots with pupils) ────────────────────────
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.beginPath();
+  ctx.arc(cx - headR * 0.3, headY + headR * 0.1, headR * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + headR * 0.3, headY + headR * 0.1, headR * 0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = 'rgba(15,8,4,0.85)';
+  ctx.beginPath();
+  ctx.arc(cx - headR * 0.28, headY + headR * 0.12, headR * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx + headR * 0.28, headY + headR * 0.12, headR * 0.1, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+  ctx.globalAlpha = 1;
 
   // ── Occupation prop ───────────────────────────────────────────
   const role = being.role.toLowerCase();
   ctx.save();
-  const propAlpha = 0.55 + ambientLight * 0.3;
+  const propAlpha = Math.min(1, 0.5 + ambientLight * 0.35);
+  ctx.globalAlpha = propAlpha;
 
   if (role.includes('hunt') || role.includes('ranger')) {
-    // Bow: arc on right side
-    ctx.globalAlpha = propAlpha;
     ctx.strokeStyle = '#8b5e3c';
     ctx.lineWidth = 1.5 * s;
     ctx.beginPath();
-    ctx.arc(cx + 7 * s, shoulderY + 1 * s, 5 * s, -Math.PI * 0.65, Math.PI * 0.65);
+    ctx.arc(cx + 8 * s, neckY + 3 * s, 5.5 * s, -Math.PI * 0.6, Math.PI * 0.6);
     ctx.stroke();
-    // Bowstring
-    ctx.strokeStyle = 'rgba(220,200,160,0.6)';
+    ctx.strokeStyle = 'rgba(210,190,150,0.55)';
     ctx.lineWidth = 0.8 * s;
     ctx.beginPath();
-    ctx.moveTo(cx + 7 * s, shoulderY + 1 * s - 5 * s * Math.sin(0.65));
-    ctx.lineTo(cx + 7 * s, shoulderY + 1 * s + 5 * s * Math.sin(0.65));
+    ctx.moveTo(cx + 8 * s, neckY + 3 * s - 5.5 * s * Math.sin(0.6));
+    ctx.lineTo(cx + 8 * s, neckY + 3 * s + 5.5 * s * Math.sin(0.6));
     ctx.stroke();
+
   } else if (role.includes('farm') || role.includes('herder') || role.includes('shepherd')) {
-    // Hoe / staff: diagonal line from hand down to ground
-    ctx.globalAlpha = propAlpha;
     ctx.strokeStyle = '#6b4423';
     ctx.lineWidth = 1.8 * s;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(cx + 6 * s, shoulderY + 2 * s);
-    ctx.lineTo(cx + 3 * s, groundY - 1 * s);
+    ctx.moveTo(cx + 7 * s, neckY + 2 * s);
+    ctx.lineTo(cx + 4 * s, groundY);
     ctx.stroke();
     ctx.beginPath();
-    ctx.moveTo(cx, groundY - 4 * s);
-    ctx.lineTo(cx + 6 * s, groundY - 2 * s);
+    ctx.moveTo(cx + 1 * s, groundY - 4 * s);
+    ctx.lineTo(cx + 7 * s, groundY - 2 * s);
     ctx.stroke();
+
   } else if (role.includes('guard') || role.includes('soldier') || role.includes('warrior')) {
-    // Spear: vertical pole with triangle head
-    ctx.globalAlpha = propAlpha;
-    ctx.strokeStyle = '#6b6b6b';
-    ctx.lineWidth = 1.5 * s;
+    ctx.strokeStyle = '#808080';
+    ctx.lineWidth = 1.6 * s;
     ctx.beginPath();
-    ctx.moveTo(cx + 9 * s, groundY);
-    ctx.lineTo(cx + 9 * s, headY - 10 * s);
+    ctx.moveTo(cx + 10 * s, groundY);
+    ctx.lineTo(cx + 10 * s, headY - 10 * s);
     ctx.stroke();
-    ctx.fillStyle = `rgba(180,180,190,${propAlpha})`;
+    ctx.fillStyle = `rgba(190,185,195,${propAlpha})`;
     ctx.beginPath();
-    ctx.moveTo(cx + 9 * s, headY - 14 * s);
-    ctx.lineTo(cx + 6 * s, headY - 8 * s);
-    ctx.lineTo(cx + 12 * s, headY - 8 * s);
+    ctx.moveTo(cx + 10 * s, headY - 15 * s);
+    ctx.lineTo(cx + 6.5 * s, headY - 8 * s);
+    ctx.lineTo(cx + 13.5 * s, headY - 8 * s);
     ctx.closePath();
     ctx.fill();
+
   } else if (role.includes('fish') || role.includes('sailor')) {
-    // Fishing rod angling forward from shoulder
-    ctx.globalAlpha = propAlpha;
-    ctx.strokeStyle = '#6b4423';
+    ctx.strokeStyle = '#5a3a1a';
     ctx.lineWidth = 1.5 * s;
     ctx.beginPath();
-    ctx.moveTo(cx - 5 * s, shoulderY);
-    ctx.lineTo(cx - 16 * s, shoulderY - 14 * s);
+    ctx.moveTo(cx - 5 * s, neckY + 2 * s);
+    ctx.lineTo(cx - 17 * s, neckY - 12 * s);
     ctx.stroke();
-    // Fishing line
-    ctx.strokeStyle = 'rgba(200,190,160,0.45)';
+    ctx.strokeStyle = 'rgba(200,185,155,0.4)';
     ctx.lineWidth = 0.7 * s;
     ctx.beginPath();
-    ctx.moveTo(cx - 16 * s, shoulderY - 14 * s);
-    ctx.lineTo(cx - 20 * s, shoulderY - 5 * s);
+    ctx.moveTo(cx - 17 * s, neckY - 12 * s);
+    ctx.lineTo(cx - 21 * s, neckY - 3 * s);
     ctx.stroke();
+
   } else if (role.includes('heal') || role.includes('shaman') || role.includes('priest')) {
-    // Green cross above head
-    const crossY = headY - headR * 1.5 - 8 * s;
-    ctx.globalAlpha = propAlpha * 0.85;
-    ctx.strokeStyle = 'rgba(80, 220, 130, 0.9)';
-    ctx.lineWidth = 1.8 * s;
+    const crossY = headY - headR * 1.6 - 7 * s;
+    ctx.strokeStyle = 'rgba(70, 210, 120, 0.9)';
+    ctx.lineWidth = 2 * s;
     ctx.beginPath();
     ctx.moveTo(cx, crossY - 4 * s);
     ctx.lineTo(cx, crossY + 4 * s);
     ctx.moveTo(cx - 4 * s, crossY);
     ctx.lineTo(cx + 4 * s, crossY);
     ctx.stroke();
+
   } else if (role.includes('trade') || role.includes('merchant')) {
-    // Pack on back: small rectangle
-    ctx.globalAlpha = propAlpha * 0.75;
-    ctx.fillStyle = adjustBrightness(clanColor, 0.7);
+    ctx.fillStyle = adjustBrightness(clanColor, 0.65);
+    const packW = 6 * s, packH = 9 * s;
+    ctx.fillRect(cx - shoulderW - packW, neckY + 1 * s, packW, packH);
     ctx.strokeStyle = adjustBrightness(clanColor, 0.4);
     ctx.lineWidth = 0.8 * s;
-    const packW = 6 * s, packH = 8 * s;
-    ctx.fillRect(cx - headR - packW, shoulderY, packW, packH);
-    ctx.strokeRect(cx - headR - packW, shoulderY, packW, packH);
-  } else if (role.includes('craft') || role.includes('smith') || role.includes('builder')) {
-    // Hammer: T-shape held up
-    ctx.globalAlpha = propAlpha;
-    ctx.strokeStyle = '#7a7a7a';
-    ctx.lineWidth = 1.8 * s;
+    ctx.strokeRect(cx - shoulderW - packW, neckY + 1 * s, packW, packH);
+    // Strap
     ctx.beginPath();
-    ctx.moveTo(cx + 7 * s, shoulderY);
-    ctx.lineTo(cx + 7 * s, hipY);
+    ctx.moveTo(cx - shoulderW, neckY + 1 * s);
+    ctx.lineTo(cx - shoulderW - packW, neckY + 4 * s);
     ctx.stroke();
-    ctx.fillStyle = `rgba(140,130,120,${propAlpha})`;
-    ctx.fillRect(cx + 4 * s, shoulderY - 2 * s, 6 * s, 3 * s);
+
+  } else if (role.includes('craft') || role.includes('smith') || role.includes('builder')) {
+    ctx.strokeStyle = '#7a7a80';
+    ctx.lineWidth = 2 * s;
+    ctx.beginPath();
+    ctx.moveTo(cx + 8 * s, neckY + 1 * s);
+    ctx.lineTo(cx + 8 * s, hipY - 1 * s);
+    ctx.stroke();
+    ctx.fillStyle = `rgba(130,125,135,${propAlpha})`;
+    ctx.fillRect(cx + 4.5 * s, neckY - 2 * s, 7 * s, 3.5 * s);
   }
 
   ctx.restore();
   ctx.globalAlpha = 1;
 
-  // Name label (always for core, only on hover/select for others)
+  // ── Name label ────────────────────────────────────────────────
   if (being.isCore || isSelected || isHovered) {
-    const labelY = headY - headR - 5 * s;
+    const labelY = headY - headR - 4 * s;
     ctx.save();
     ctx.font = `${being.isCore ? 10 : 8}px var(--font-display, Georgia, serif)`;
-    ctx.textAlign = "center";
+    ctx.textAlign = 'center';
     const tw = ctx.measureText(being.name).width;
-    ctx.fillStyle = "rgba(8,8,20,0.7)";
+    ctx.fillStyle = 'rgba(6,6,18,0.72)';
     rrect(ctx, cx - tw / 2 - 3, labelY - 10, tw + 6, 13, 3);
     ctx.fill();
-    ctx.fillStyle = being.isCore ? "#e8d5a0" : "rgba(220,210,200,0.9)";
+    ctx.fillStyle = being.isCore ? '#e8d5a0' : 'rgba(220,210,200,0.9)';
     ctx.fillText(being.name, cx, labelY);
     ctx.restore();
   }
 
-  // Action bubble for selected/hovered
+  // ── Action bubble ─────────────────────────────────────────────
   if ((isSelected || isHovered) && being.currentAction) {
-    const bubbleY = headY - headR - 24 * s;
+    const bubbleY = headY - headR - (being.isCore || isSelected ? 26 : 22) * s;
     ctx.save();
-    ctx.font = `italic ${8}px var(--font-body, sans-serif)`;
-    ctx.textAlign = "center";
-    const tw = Math.min(ctx.measureText(being.currentAction).width, 100);
-    ctx.fillStyle = "rgba(8,8,20,0.75)";
+    ctx.font = `italic 8px var(--font-body, sans-serif)`;
+    ctx.textAlign = 'center';
+    const action = being.currentAction.length > 24 ? being.currentAction.slice(0, 24) + '…' : being.currentAction;
+    const tw = ctx.measureText(action).width;
+    ctx.fillStyle = 'rgba(6,6,18,0.78)';
     rrect(ctx, cx - tw / 2 - 4, bubbleY - 10, tw + 8, 12, 4);
     ctx.fill();
-    ctx.fillStyle = "#c8a060";
-    // Trim long actions
-    const action = being.currentAction.length > 22 ? being.currentAction.slice(0, 22) + "…" : being.currentAction;
+    ctx.fillStyle = '#c8a060';
     ctx.fillText(action, cx, bubbleY);
     ctx.restore();
   }
+}
+
+// Seeded deterministic pseudo-random — avoids per-frame flicker from Math.random()
+function pseudoRand(seed: number): number {
+  const x = Math.sin(seed + 1) * 43758.5453123;
+  return x - Math.floor(x);
+}
+
+function drawClouds(
+  ctx: CanvasRenderingContext2D,
+  clouds: Cloud[],
+  W: number,
+  H: number,
+  scaleX: number,
+  _scaleY: number,
+  ambientLight: number,
+  worldTime: number
+) {
+  const opacity = Math.min(1, Math.max(0, (ambientLight - 0.15) * 2.2));
+  if (opacity <= 0.02) return;
+
+  const isDawn = worldTime >= 5 && worldTime < 9;
+  const isDusk = worldTime >= 17 && worldTime < 21;
+  const isGolden = isDawn || isDusk;
+
+  for (const cloud of clouds) {
+    // Drift clouds forward each frame
+    cloud.x = (cloud.x + cloud.speed) % (WORLD_WIDTH + cloud.width);
+
+    const cx = cloud.x * scaleX;
+    const cy = cloud.y * (H / WORLD_HEIGHT);
+
+    // Subtle cloud shadow on ground plane
+    if (ambientLight > 0.55) {
+      const shadowY = H * 0.62 + (cloud.y / WORLD_HEIGHT) * H * 0.08;
+      ctx.save();
+      ctx.globalAlpha = 0.045 * ambientLight;
+      ctx.fillStyle = 'rgba(0,0,25,1)';
+      ctx.beginPath();
+      ctx.ellipse(cx, shadowY, cloud.width * scaleX * 0.45, 7 * (H / WORLD_HEIGHT), 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Draw each puff
+    for (const puff of cloud.puffs) {
+      const px = cx + puff.dx * scaleX;
+      const py = cy + puff.dy * (H / WORLD_HEIGHT);
+      const pr = puff.r * scaleX;
+
+      const g = ctx.createRadialGradient(px, py - pr * 0.18, 0, px, py, pr);
+      if (isGolden) {
+        const warm = isDawn ? 'rgba(255,205,145,' : 'rgba(255,170,100,';
+        g.addColorStop(0, `${warm}${0.92 * opacity})`);
+        g.addColorStop(0.65, `${warm}${0.7 * opacity})`);
+        g.addColorStop(1, `${warm}0)`);
+      } else {
+        g.addColorStop(0, `rgba(255,255,255,${0.88 * opacity})`);
+        g.addColorStop(0.65, `rgba(240,242,255,${0.65 * opacity})`);
+        g.addColorStop(1, 'rgba(220,225,240,0)');
+      }
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+function drawHillLayers(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  _scaleX: number,
+  _scaleY: number,
+  ambientLight: number,
+  worldTime: number
+) {
+  const isDawn = worldTime >= 5 && worldTime < 9;
+  const isDusk = worldTime >= 17 && worldTime < 21;
+
+  // 3 hill layers from far to near, each progressively darker/greener
+  const layers: Array<{ peaks: [number, number][]; r: number; g: number; b: number; baseY: number }> = [
+    {
+      peaks: [[0,0.445],[0.12,0.415],[0.26,0.43],[0.42,0.405],[0.58,0.42],[0.74,0.41],[0.88,0.43],[1,0.445]],
+      r: 32, g: 45, b: 24, baseY: 0.445,
+    },
+    {
+      peaks: [[0,0.46],[0.1,0.435],[0.24,0.45],[0.4,0.425],[0.56,0.44],[0.72,0.43],[0.86,0.45],[1,0.46]],
+      r: 40, g: 56, b: 28, baseY: 0.46,
+    },
+    {
+      peaks: [[0,0.475],[0.08,0.455],[0.22,0.465],[0.38,0.448],[0.54,0.46],[0.7,0.452],[0.85,0.465],[1,0.475]],
+      r: 50, g: 68, b: 34, baseY: 0.475,
+    },
+  ];
+
+  for (const layer of layers) {
+    const lf = ambientLight * 0.75 + 0.12;
+    // Warm tint at dawn/dusk
+    let tintR = 0, tintG = 0, tintB = 0;
+    if (isDawn) { tintR = 30; tintG = 10; }
+    else if (isDusk) { tintR = 25; tintG = -5; tintB = -5; }
+
+    const r = Math.max(0, Math.min(255, Math.round(layer.r * lf + tintR)));
+    const g = Math.max(0, Math.min(255, Math.round(layer.g * lf + tintG)));
+    const b = Math.max(0, Math.min(255, Math.round(layer.b * lf + tintB)));
+
+    ctx.fillStyle = `rgb(${r},${g},${b})`;
+    ctx.beginPath();
+    ctx.moveTo(0, H);
+
+    const peaks = layer.peaks;
+    ctx.lineTo(0, H * peaks[0][1]);
+    for (let i = 0; i < peaks.length - 1; i++) {
+      const [x1, y1] = peaks[i];
+      const [x2, y2] = peaks[i + 1];
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2;
+      ctx.quadraticCurveTo(W * x1, H * y1, W * mx, H * my);
+    }
+    const last = peaks[peaks.length - 1];
+    ctx.lineTo(W * last[0], H * last[1]);
+    ctx.lineTo(W, H);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Aerial haze band at the horizon line
+  if (isDawn || isDusk) {
+    const hazeColor = isDawn ? 'rgba(255,150,60,' : 'rgba(200,70,20,';
+    const hg = ctx.createLinearGradient(0, H * 0.41, 0, H * 0.5);
+    hg.addColorStop(0, `${hazeColor}0)`);
+    hg.addColorStop(0.5, `${hazeColor}${0.12 * ambientLight})`);
+    hg.addColorStop(1, `${hazeColor}0)`);
+    ctx.fillStyle = hg;
+    ctx.fillRect(0, H * 0.41, W, H * 0.09);
+  }
+}
+
+function drawGroundTexture(
+  ctx: CanvasRenderingContext2D,
+  W: number,
+  H: number,
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number
+) {
+  if (ambientLight < 0.25) return;
+
+  const horizonY = H * 0.48;
+  const lf = ambientLight * 0.55 + 0.08;
+
+  ctx.save();
+  ctx.strokeStyle = `rgba(55,80,30,${0.22 * lf})`;
+  ctx.lineWidth = 0.9 * scaleX;
+  ctx.lineCap = 'round';
+
+  const spacingX = 20 * scaleX;
+  const spacingY = 14 * scaleY;
+
+  for (let gx = 0; gx < W; gx += spacingX) {
+    for (let gy = horizonY; gy < H; gy += spacingY) {
+      const depth = (gy - horizonY) / (H - horizonY);
+      // More grass density in foreground, sparse near horizon
+      if (pseudoRand(gx * 0.05 + gy * 0.04) > depth * 0.85 + 0.15) continue;
+
+      // Deterministic jitter
+      const jx = (pseudoRand(gx * 7919 * 0.001 + gy * 6271 * 0.001) - 0.5) * spacingX * 0.8;
+      const jy = (pseudoRand(gx * 3571 * 0.001 + gy * 7993 * 0.001) - 0.5) * spacingY * 0.6;
+      const tx = gx + jx;
+      const ty = gy + jy;
+      const gh = (1.5 + depth * 4) * scaleY;
+      const lean = (pseudoRand(tx * 0.1 + ty * 0.07) - 0.5) * 2 * scaleX;
+
+      ctx.beginPath();
+      ctx.moveTo(tx - 2.2 * scaleX, ty);
+      ctx.lineTo(tx + lean, ty - gh);
+      ctx.moveTo(tx + 2.2 * scaleX, ty);
+      ctx.lineTo(tx + lean, ty - gh);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}
+
+function drawAtmosphericParticles(
+  ctx: CanvasRenderingContext2D,
+  settlements: Array<{ x: number; y: number }>,
+  _W: number,
+  _H: number,
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number,
+  t: number,
+  worldTime: number
+) {
+  const isNight = worldTime < 5.5 || worldTime > 21.5;
+  const isEvening = worldTime >= 19 || worldTime <= 7;
+
+  // ── Fireflies near settlements at night/dusk ────────────────
+  if (isEvening || isNight) {
+    const nightDepth = Math.max(0, 1 - ambientLight * 1.4);
+    if (nightDepth > 0.05) {
+      for (const settlement of settlements) {
+        const sx = settlement.x * scaleX;
+        const sy = settlement.y * scaleY;
+        const count = 6;
+        for (let i = 0; i < count; i++) {
+          const seed1 = i * 1.73 + settlement.x * 0.01;
+          const seed2 = i * 2.31 + settlement.y * 0.01;
+          const fx = sx + Math.sin(t * 0.35 + seed1 * 3.7) * 50 * scaleX;
+          const fy = sy + Math.cos(t * 0.27 + seed2 * 2.9) * 30 * scaleY - 12 * scaleY;
+          const flicker = 0.4 + 0.6 * Math.abs(Math.sin(t * 4.1 + seed1 * 6.3));
+          ctx.save();
+          ctx.globalAlpha = flicker * nightDepth * 0.75;
+          const fg = ctx.createRadialGradient(fx, fy, 0, fx, fy, 5 * scaleX);
+          fg.addColorStop(0, 'rgba(160,255,80,1)');
+          fg.addColorStop(0.5, 'rgba(120,220,60,0.4)');
+          fg.addColorStop(1, 'transparent');
+          ctx.fillStyle = fg;
+          ctx.beginPath();
+          ctx.arc(fx, fy, 5 * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+          // Bright core
+          ctx.globalAlpha = flicker * nightDepth;
+          ctx.fillStyle = 'rgba(200,255,100,0.9)';
+          ctx.beginPath();
+          ctx.arc(fx, fy, 1.2 * scaleX, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+    }
+  }
+
+  // ── Dust motes floating in daytime ─────────────────────────
+  if (ambientLight > 0.65) {
+    const dustAlpha = (ambientLight - 0.65) * 0.25;
+    ctx.fillStyle = `rgba(255, 238, 190, ${dustAlpha})`;
+    for (let i = 0; i < 18; i++) {
+      const seed = i * 137.5;
+      const mx = ((t * 6 * (1 + pseudoRand(seed) * 0.4) + seed * 55) % (_W || 800));
+      const my = (_H || 560) * 0.52 + Math.sin(t * 0.25 + seed) * (_H || 560) * 0.14 + pseudoRand(seed + 1) * (_H || 560) * 0.18;
+      const mSize = (0.8 + pseudoRand(seed + 2) * 1.4) * scaleX;
+      ctx.beginPath();
+      ctx.arc(mx, my, mSize, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.globalAlpha = 1;
 }
 
 function drawWeather(
