@@ -55,6 +55,14 @@ interface CanvasNote {
   color: string;
 }
 
+interface SpeechBubble {
+  personId: string;
+  text: string;       // short (max 45 chars)
+  createdAt: number;  // performance.now()
+  duration: number;   // ms to show
+  isThought: boolean; // thought vs speech
+}
+
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 560;
 
@@ -79,6 +87,7 @@ export function WorldViewer({
   const posCacheRef = useRef<Map<string, { cx: number; cy: number; tx: number; ty: number }>>(new Map());
   const notesRef = useRef<CanvasNote[]>([]);
   const knownEventIdsRef = useRef<Set<string>>(new Set());
+  const speechBubblesRef = useRef<SpeechBubble[]>([]);
 
   worldStateRef.current = worldState;
 
@@ -311,6 +320,64 @@ export function WorldViewer({
       }
     }
 
+    // ── Interaction arcs between beings currently speaking ────────
+    if (state?.beings) {
+      const activeSpeakerIds = new Set(speechBubblesRef.current
+        .filter(b => performance.now() - b.createdAt < b.duration)
+        .map(b => b.personId));
+      const cache = posCacheRef.current;
+      const speakingBeings = state.beings.filter(b => b.status !== 'DEAD' && activeSpeakerIds.has(b.id));
+      for (let i = 0; i < speakingBeings.length; i++) {
+        for (let j = i + 1; j < speakingBeings.length; j++) {
+          const a = speakingBeings[i];
+          const b = speakingBeings[j];
+          const posA = cache.get(a.id);
+          const posB = cache.get(b.id);
+          const ax = posA ? posA.cx * scaleX : a.x * scaleX;
+          const ay = posA ? posA.cy * scaleY : a.y * scaleY;
+          const bx2 = posB ? posB.cx * scaleX : b.x * scaleX;
+          const by2 = posB ? posB.cy * scaleY : b.y * scaleY;
+          const dist = Math.sqrt((ax - bx2) ** 2 + (ay - by2) ** 2);
+          if (dist < 200 * Math.min(scaleX, scaleY)) {
+            ctx.save();
+            ctx.globalAlpha = 0.25;
+            ctx.strokeStyle = 'rgba(255,220,150,0.6)';
+            ctx.lineWidth = 0.8;
+            ctx.setLineDash([3, 5]);
+            ctx.beginPath();
+            const cpx = (ax + bx2) / 2;
+            const cpy = Math.min(ay, by2) - 20;
+            ctx.moveTo(ax, ay);
+            ctx.quadraticCurveTo(cpx, cpy, bx2, by2);
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
+    }
+
+    // ── Speech bubbles ─────────────────────────────────────────────
+    if (state?.beings) {
+      const nowMs = performance.now();
+      speechBubblesRef.current = speechBubblesRef.current.filter(b => nowMs - b.createdAt < b.duration);
+      for (const bubble of speechBubblesRef.current) {
+        const being = state.beings.find(b => b.id === bubble.personId);
+        if (!being || being.status === 'DEAD') continue;
+        const pos = posCacheRef.current.get(being.id);
+        const bx = (pos ? pos.cx : being.x) * scaleX;
+        const worldDrawY2 = pos ? pos.cy : being.y;
+        const depthFactor2 = Math.max(0.45, Math.min(1.6, 0.5 + (worldDrawY2 - WORLD_HEIGHT * 0.40) / (WORLD_HEIGHT * 0.55)));
+        const headR2 = 4.5 * (being.isCore ? 1.5 : 1.0) * Math.min(scaleX, scaleY) * depthFactor2;
+        const byHead = worldDrawY2 * scaleY - headR2 * 0.5 - headR2 * 1.5;
+        const elapsed = nowMs - bubble.createdAt;
+        const fadeStart = bubble.duration * 0.7;
+        const alpha = elapsed > fadeStart ? 1 - (elapsed - fadeStart) / (bubble.duration * 0.3) : 1;
+        if (alpha > 0.05) {
+          drawSpeechBubble(ctx, bx, byHead, bubble.text, bubble.isThought, alpha);
+        }
+      }
+    }
+
     // ── Atmospheric particles (fireflies / dust) ──────────────────
     if (state?.settlements) {
       drawAtmosphericParticles(ctx, state.settlements, W, H, scaleX, scaleY, ambientLight, t, worldTime);
@@ -464,6 +531,55 @@ export function WorldViewer({
     // Cap at 4 simultaneous notifications
     if (notesRef.current.length > 4) {
       notesRef.current = notesRef.current.slice(-4);
+    }
+
+    // ── Speech bubbles from events ─────────────────────────────────
+    const now = performance.now();
+    for (const e of newEvents) {
+      const isSocial = e.category === 'SOCIAL' || (e.type === 'MARRIAGE' || e.type === 'ALLIANCE') || e.title.includes(' and ');
+      const quoteRegex = /"([^"]{5,60})"/g;
+      const desc = e.description ?? '';
+      const quotes: string[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = quoteRegex.exec(desc)) !== null) {
+        quotes.push(m[1]);
+      }
+
+      if (isSocial && quotes.length >= 1 && e.beingId) {
+        // Person A gets first quote
+        speechBubblesRef.current.push({
+          personId: e.beingId,
+          text: quotes[0].length > 45 ? quotes[0].slice(0, 45) + '…' : quotes[0],
+          createdAt: now,
+          duration: 7000,
+          isThought: false,
+        });
+        // Person B gets second quote if present
+        const personBId = e.metadata?.person_b_id as string | undefined;
+        if (quotes.length >= 2 && personBId) {
+          speechBubblesRef.current.push({
+            personId: personBId,
+            text: quotes[1].length > 45 ? quotes[1].slice(0, 45) + '…' : quotes[1],
+            createdAt: now,
+            duration: 7000,
+            isThought: false,
+          });
+        }
+      } else if (!isSocial && e.importance >= 50 && e.beingId && quotes.length === 0) {
+        // Thought bubble for high-importance non-social events
+        const shortTitle = e.title.length > 38 ? e.title.slice(0, 38) + '…' : e.title;
+        speechBubblesRef.current.push({
+          personId: e.beingId,
+          text: shortTitle,
+          createdAt: now,
+          duration: 6000,
+          isThought: true,
+        });
+      }
+    }
+    // Cap speech bubbles
+    if (speechBubblesRef.current.length > 8) {
+      speechBubblesRef.current = speechBubblesRef.current.slice(-8);
     }
   }, [worldState?.recentEvents]);
 
@@ -1265,9 +1381,68 @@ function drawSettlement(
   ctx.restore();
 }
 
+function getOccupationColor(role: string): string {
+  const r = role.toLowerCase();
+  if (r.includes('hunt')) return '#3d5a30';
+  if (r.includes('farm')) return '#8b6914';
+  if (r.includes('heal')) return '#3a6080';
+  if (r.includes('guard')) return '#4a4a5a';
+  if (r.includes('fish')) return '#2a6080';
+  if (r.includes('trad')) return '#8b5a2b';
+  if (r.includes('craft')) return '#5a4535';
+  if (r.includes('scout')) return '#4a6040';
+  if (r.includes('lead')) return '#7a4a20';
+  return '#5a4a35';
+}
+
+function drawSpeechBubble(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  topY: number,
+  text: string,
+  isThought: boolean,
+  alpha: number
+) {
+  const padding = { x: 8, y: 5 };
+  ctx.font = '9px sans-serif';
+  const w = ctx.measureText(text).width + padding.x * 2;
+  const h = 18;
+  const bx = cx - w / 2;
+  const by = topY - h - 12;
+
+  // White/cream rounded rect
+  ctx.globalAlpha = alpha * 0.92;
+  ctx.fillStyle = isThought ? 'rgba(200,200,240,0.9)' : 'rgba(255,252,240,0.95)';
+  rrect(ctx, bx, by, w, h, 4);
+  ctx.fill();
+
+  // Border
+  ctx.strokeStyle = isThought ? 'rgba(150,150,200,0.6)' : 'rgba(180,160,120,0.7)';
+  ctx.lineWidth = 0.8;
+  ctx.stroke();
+
+  // Tail (triangle pointing down to being head)
+  ctx.fillStyle = isThought ? 'rgba(200,200,240,0.9)' : 'rgba(255,252,240,0.95)';
+  ctx.beginPath();
+  ctx.moveTo(cx - 4, by + h);
+  ctx.lineTo(cx + 4, by + h);
+  ctx.lineTo(cx, by + h + 8);
+  ctx.closePath();
+  ctx.fill();
+
+  // Text
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = '#2a1a0a';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text.length > 42 ? text.slice(0, 42) + '…' : text, cx, by + h / 2);
+  ctx.textBaseline = 'alphabetic';
+  ctx.globalAlpha = 1;
+}
+
 function drawBeing(
   ctx: CanvasRenderingContext2D,
-  being: { id: string; x: number; y: number; status: string; isCore: boolean; name: string; role: string; currentAction: string | null },
+  being: SimBeing,
   clanColor: string,
   scaleX: number,
   scaleY: number,
@@ -1293,10 +1468,11 @@ function drawBeing(
   const depthFactor = Math.max(0.45, Math.min(1.6,
     0.5 + (worldDrawY - WORLD_HEIGHT * 0.40) / (WORLD_HEIGHT * 0.55)
   ));
-  const s = (being.isCore ? 1.5 : 1.0) * Math.min(scaleX, scaleY) * depthFactor;
+  const ageScale = being.lifeStage === 'CHILD' ? 0.55 : being.lifeStage === 'ELDER' ? 0.85 : 1.0;
+  const s = (being.isCore ? 1.5 : 1.0) * ageScale * Math.min(scaleX, scaleY) * depthFactor;
 
   // ── Measurements ──────────────────────────────────────────────
-  const headR   = 4.5 * s;
+  const headR   = 4.5 * s * (being.lifeStage === 'CHILD' ? 1.1 : 1.0);
   const headY   = baseY + bob * scaleY - headR * 0.5;
   const neckY   = headY + headR * 1.75;
   const hipY    = neckY + 10 * s;
