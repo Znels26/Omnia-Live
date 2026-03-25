@@ -17,67 +17,78 @@ export default function WatchPage() {
   const [events, setEvents] = useState<SimEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [since, setSince] = useState<string | null>(null);
+  const [tickStatus, setTickStatus] = useState<"ok" | "err" | "idle">("idle");
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
-  const animRef = useRef<NodeJS.Timeout | null>(null);
+  const clockRef = useRef<NodeJS.Timeout | null>(null);
   const worldRef = useRef<WorldState | null>(null);
+  // Client-side world clock (advances smoothly, not reset by server syncs)
+  const clientTimeRef = useRef<number>(8);
 
   useEffect(() => {
-    // Initial load
     loadWorldState();
 
-    // Tick the simulation every 5 seconds (moves people, advances time, fires events)
-    tickRef.current = setInterval(runTick, 5000);
+    // Tick the simulation every 3 seconds
+    tickRef.current = setInterval(runTick, 3000);
 
-    // Sync fresh state from DB every 10 seconds
-    pollRef.current = setInterval(loadWorldState, 10000);
+    // Sync fresh positions + events from DB every 8 seconds
+    pollRef.current = setInterval(loadWorldState, 8000);
 
-    // Client-side animation: interpolate being positions every 500ms for smooth movement
-    animRef.current = setInterval(animateBeings, 500);
+    // Smooth client clock: advance 1 world-minute every 200ms ≈ 5 mins/sec
+    // A full day takes ~288 real seconds (4.8 min) at this rate
+    clockRef.current = setInterval(() => {
+      clientTimeRef.current = (clientTimeRef.current + 1 / 60) % 24;
+
+      setWorldState(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          worldTime: clientTimeRef.current,
+          // tiny positional jitter so beings look continuously alive
+          beings: prev.beings.map(b => {
+            if (b.status === "DEAD") return b;
+            const jx = (Math.random() - 0.5) * 1.5;
+            const jy = (Math.random() - 0.5) * 1.5;
+            return {
+              ...b,
+              x: Math.max(10, Math.min(790, b.x + jx)),
+              y: Math.max(40, Math.min(520, b.y + jy)),
+            };
+          }),
+        };
+      });
+    }, 200);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       if (tickRef.current) clearInterval(tickRef.current);
-      if (animRef.current) clearInterval(animRef.current);
+      if (clockRef.current) clearInterval(clockRef.current);
     };
   }, []);
 
   async function runTick() {
     try {
-      await fetch("/api/world/tick", { method: "POST" });
-      // After tick, reload state to pick up DB changes
-      await loadWorldState();
+      const res = await fetch("/api/world/tick", { method: "POST" });
+      if (!res.ok) { setTickStatus("err"); return; }
+      setTickStatus("ok");
+      // After tick: merge new being positions without snapping the clock
+      const stateRes = await fetch("/api/world", { cache: "no-store" });
+      if (!stateRes.ok) return;
+      const data = await stateRes.json();
+      const serverWorld: WorldState = data.world;
+      // Preserve client clock — only use server worldTime to seed it on first load
+      setWorldState(prev => {
+        const merged = {
+          ...serverWorld,
+          worldTime: clientTimeRef.current,
+        };
+        worldRef.current = merged;
+        return merged;
+      });
+      setEvents(data.events ?? []);
     } catch {
-      // Silent — tick failures shouldn't break the viewer
+      setTickStatus("err");
     }
-  }
-
-  // Smoothly interpolate being positions client-side between server syncs
-  function animateBeings() {
-    const state = worldRef.current;
-    if (!state) return;
-
-    setWorldState(prev => {
-      if (!prev) return prev;
-      const updated = {
-        ...prev,
-        // Advance world clock smoothly (1 world-minute per animation frame ≈ fast enough to feel live)
-        worldTime: (prev.worldTime + 0.02) % 24,
-        beings: prev.beings.map(b => {
-          if (b.status === "DEAD") return b;
-          // Small jitter to make beings look like they're moving continuously
-          const jx = (Math.random() - 0.5) * 3;
-          const jy = (Math.random() - 0.5) * 3;
-          return {
-            ...b,
-            x: Math.max(10, Math.min(790, b.x + jx)),
-            y: Math.max(40, Math.min(520, b.y + jy)),
-          };
-        }),
-      };
-      worldRef.current = updated;
-      return updated;
-    });
   }
 
   async function loadWorldState() {
@@ -85,8 +96,18 @@ export default function WatchPage() {
       const res = await fetch("/api/world", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
-      worldRef.current = data.world;
-      setWorldState(data.world);
+      const serverWorld: WorldState = data.world;
+      // On very first load, seed client clock from server
+      if (!worldRef.current) {
+        clientTimeRef.current = serverWorld.worldTime;
+      }
+      // Merge: keep smooth client clock, use server for everything else
+      const merged = {
+        ...serverWorld,
+        worldTime: clientTimeRef.current,
+      };
+      worldRef.current = merged;
+      setWorldState(merged);
       setEvents(data.events ?? []);
       setSince(data.sinceLastVisit);
       setLoading(false);
@@ -175,8 +196,18 @@ export default function WatchPage() {
         {/* World status header */}
         <div className="px-4 py-3 border-b border-fv-border flex items-center justify-between flex-shrink-0">
           <div>
-            <div className="font-display text-fv-moon text-sm font-medium">
+            <div className="font-display text-fv-moon text-sm font-medium flex items-center gap-2">
               {worldState?.name ?? "First Valley"}
+              {/* Live pulse indicator */}
+              <span
+                className="w-2 h-2 rounded-full flex-shrink-0"
+                style={{
+                  backgroundColor: tickStatus === "err" ? "#f87171" : "#4ade80",
+                  boxShadow: tickStatus !== "err" ? "0 0 6px #4ade80" : undefined,
+                  animation: tickStatus !== "err" ? "pulse 2s infinite" : undefined,
+                }}
+                title={tickStatus === "err" ? "Simulation error" : "Simulation running"}
+              />
             </div>
             <div className="text-xs text-fv-text-muted">
               {worldState ? formatWorldAge(worldState.age) : "Loading..."}
@@ -188,7 +219,7 @@ export default function WatchPage() {
                 {formatWorldTime(worldState.worldTime)}
               </div>
               <div className="text-xs text-fv-text-dim">
-                {worldTickToTime(worldState.tick)}
+                Day {worldState.day} · Year {worldState.year}
               </div>
             </div>
           )}

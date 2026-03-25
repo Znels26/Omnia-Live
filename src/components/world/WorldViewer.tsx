@@ -144,6 +144,22 @@ export function WorldViewer({
     // ── Mountains (background) ───────────────────────────────────
     drawMountains(ctx, W, H, scaleX, scaleY, ambientLight);
 
+    // ── Ground plane — covers the lower 55% with a grass gradient ──
+    {
+      const horizonY = H * 0.42;
+      const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
+      const gBase = ambientLight > 0.5
+        ? `rgba(38,58,28,${0.5 + ambientLight * 0.3})`
+        : `rgba(18,28,14,${0.4 + ambientLight * 0.3})`;
+      const gEdge = ambientLight > 0.5
+        ? `rgba(28,42,20,${0.6 + ambientLight * 0.2})`
+        : `rgba(10,16,8,0.7)`;
+      groundGrad.addColorStop(0, gBase);
+      groundGrad.addColorStop(1, gEdge);
+      ctx.fillStyle = groundGrad;
+      ctx.fillRect(0, horizonY, W, H - horizonY);
+    }
+
     // ── Regions / Terrain ─────────────────────────────────────────
     if (state?.regions) {
       for (const region of state.regions) {
@@ -702,8 +718,7 @@ function drawSettlement(
   ctx.textAlign = "center";
   const lw = ctx.measureText(settlement.name).width;
   ctx.fillStyle = "rgba(5,5,15,0.55)";
-  ctx.beginPath();
-  ctx.roundRect(x - lw / 2 - 3, labelY - 9, lw + 6, 11, 2);
+  rrect(ctx, x - lw / 2 - 3, labelY - 9, lw + 6, 11, 2);
   ctx.fill();
   ctx.fillStyle = `rgba(220, 210, 190, ${0.6 * ambientLight + 0.3})`;
   ctx.fillText(settlement.name, x, labelY);
@@ -853,8 +868,7 @@ function drawBeing(
     ctx.textAlign = "center";
     const tw = ctx.measureText(being.name).width;
     ctx.fillStyle = "rgba(8,8,20,0.7)";
-    ctx.beginPath();
-    ctx.roundRect(cx - tw / 2 - 3, labelY - 10, tw + 6, 13, 3);
+    rrect(ctx, cx - tw / 2 - 3, labelY - 10, tw + 6, 13, 3);
     ctx.fill();
     ctx.fillStyle = being.isCore ? "#e8d5a0" : "rgba(220,210,200,0.9)";
     ctx.fillText(being.name, cx, labelY);
@@ -869,8 +883,7 @@ function drawBeing(
     ctx.textAlign = "center";
     const tw = Math.min(ctx.measureText(being.currentAction).width, 100);
     ctx.fillStyle = "rgba(8,8,20,0.75)";
-    ctx.beginPath();
-    ctx.roundRect(cx - tw / 2 - 4, bubbleY - 10, tw + 8, 12, 4);
+    rrect(ctx, cx - tw / 2 - 4, bubbleY - 10, tw + 8, 12, 4);
     ctx.fill();
     ctx.fillStyle = "#c8a060";
     // Trim long actions
@@ -970,4 +983,23 @@ function lightenColor(hexColor: string, amount: number): string {
 
 function darkenColor(hexColor: string, amount: number): string {
   return adjustBrightness(hexColor, amount);
+}
+
+/** Browser-safe rounded rectangle — avoids ctx.roundRect which is Chrome 99+ */
+function rrect(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number, r: number
+) {
+  const rc = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rc, y);
+  ctx.lineTo(x + w - rc, y);
+  ctx.arcTo(x + w, y,     x + w, y + rc,     rc);
+  ctx.lineTo(x + w, y + h - rc);
+  ctx.arcTo(x + w, y + h, x + w - rc, y + h, rc);
+  ctx.lineTo(x + rc, y + h);
+  ctx.arcTo(x,     y + h, x, y + h - rc,     rc);
+  ctx.lineTo(x, y + rc);
+  ctx.arcTo(x, y,     x + rc, y,             rc);
+  ctx.closePath();
 }
