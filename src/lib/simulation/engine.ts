@@ -1116,7 +1116,8 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     const existingConfig = (world.config ?? {}) as Record<string, unknown>;
     const newConfig: Json = {
       ...existingConfig,
-      world_time: ((existingConfig.world_time as number ?? 8) + 1) % 24,
+      // 1 sim day = 12 real hours; ticks fire every 3s → 14400 ticks/day → 24/14400 = 1/600 hours per tick
+      world_time: ((existingConfig.world_time as number ?? 8) + 1 / 600) % 24,
     };
 
     // Persist all changes

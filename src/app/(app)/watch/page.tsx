@@ -34,10 +34,10 @@ export default function WatchPage() {
     // Sync fresh positions + events from DB every 8 seconds
     pollRef.current = setInterval(loadWorldState, 8000);
 
-    // Smooth client clock: advance 1 world-minute every 200ms ≈ 5 mins/sec
-    // A full day takes ~288 real seconds (4.8 min) at this rate
+    // Smooth client clock: 1 sim day = 12 real hours
+    // Rate: 24 / (12h * 3600s/h / 0.2s per tick) = 24/216000 = 1/9000 world-hours per tick
     clockRef.current = setInterval(() => {
-      clientTimeRef.current = (clientTimeRef.current + 1 / 60) % 24;
+      clientTimeRef.current = (clientTimeRef.current + 1 / 9000) % 24;
 
       setWorldState(prev => {
         if (!prev) return prev;
