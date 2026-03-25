@@ -20,19 +20,12 @@ export function EventFeed({
   compact = false,
   onEventClick,
   className = "",
-  autoScroll = true,
+  autoScroll: _autoScroll = true,
 }: EventFeedProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
   const prevEventsRef = useRef<SimEvent[]>([]);
 
-  useEffect(() => {
-    if (!autoScroll) return;
-    // Scroll the container itself — not scrollIntoView which hijacks page scroll on mobile
-    const el = containerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [events, autoScroll]);
-
+  // Track newly arrived events for highlight animation — no scroll manipulation
   useEffect(() => {
     const prevIds = new Set(prevEventsRef.current.map((e) => e.id));
     const newIds = new Set(
@@ -41,6 +34,7 @@ export function EventFeed({
     if (newIds.size > 0) {
       setNewEventIds(newIds);
       const timer = setTimeout(() => setNewEventIds(new Set()), 3000);
+      prevEventsRef.current = events;
       return () => clearTimeout(timer);
     }
     prevEventsRef.current = events;
@@ -55,15 +49,17 @@ export function EventFeed({
     );
   }
 
+  // Newest first — new events appear at top, no scrolling needed
   const sorted = [...events].sort(
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
 
   return (
+    // overflow-anchor: none prevents the browser from adjusting scroll position
+    // when items are prepended at the top (which causes the "drop" effect)
     <div
-      ref={containerRef}
-      className={cn("overflow-y-auto space-y-0 scrollbar-thin", className)}
-      style={{ maxHeight }}
+      className={cn("space-y-0", className)}
+      style={{ overflowAnchor: "none", maxHeight }}
     >
       {sorted.map((event) => (
         <EventFeedItem

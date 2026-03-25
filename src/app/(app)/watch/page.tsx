@@ -357,14 +357,13 @@ function PanelTabs({
         ))}
       </div>
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Tab content — this div is the single scroll owner for all tabs */}
+      <div className="flex-1 overflow-y-auto overscroll-contain">
         {tab === "events" && (
           <EventFeed
             events={events}
             compact={false}
-            maxHeight="100%"
-            autoScroll={true}
+            autoScroll={false}
           />
         )}
 

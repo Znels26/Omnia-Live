@@ -444,9 +444,9 @@ export function WorldViewer({
         </div>
       )}
 
-      {/* World info overlay */}
+      {/* World info overlay — hidden on mobile (panel header shows same info) */}
       {worldState && (
-        <div className="absolute top-3 left-3 overlay-panel px-3 py-2 text-xs space-y-0.5 z-10">
+        <div className="hidden md:block absolute top-3 left-3 overlay-panel px-3 py-2 text-xs space-y-0.5 z-10">
           <div className="font-display text-fv-moon text-sm font-medium">
             {worldState.name}
           </div>
@@ -462,9 +462,23 @@ export function WorldViewer({
         </div>
       )}
 
-      {/* Legend */}
+      {/* Mobile-only compact bar — time + weather in one line */}
       {worldState && (
-        <div className="absolute bottom-3 left-3 overlay-panel px-3 py-2 text-xs space-y-1 z-10">
+        <div className="md:hidden absolute top-2 left-2 right-2 flex items-center justify-between z-10 pointer-events-none">
+          <div className="overlay-panel px-2.5 py-1 text-xs flex items-center gap-2">
+            <span className="text-fv-ember-bright">{getWeatherDescription(worldState.weather)}</span>
+            <span className="text-fv-text-dim">·</span>
+            <span className="text-fv-text-muted capitalize">{worldState.season?.name}</span>
+          </div>
+          <div className="overlay-panel px-2.5 py-1 text-xs text-fv-text-dim">
+            {worldState.beings.filter(b => b.status === "ALIVE").length} souls
+          </div>
+        </div>
+      )}
+
+      {/* Clan legend — hidden on mobile (Clans tab covers this) */}
+      {worldState && (
+        <div className="hidden md:block absolute bottom-3 left-3 overlay-panel px-3 py-2 text-xs space-y-1 z-10">
           <div className="text-fv-text-dim text-xs uppercase tracking-wider mb-1">Clans</div>
           {worldState.clans.map((clan) => (
             <div key={clan.id} className="flex items-center gap-2">
