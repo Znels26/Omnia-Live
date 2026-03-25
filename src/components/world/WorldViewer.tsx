@@ -370,36 +370,66 @@ function drawMountains(
   scaleY: number,
   ambientLight: number
 ) {
-  // Far mountains
-  ctx.fillStyle = `rgba(40, 38, 55, ${0.6 * ambientLight + 0.2})`;
+  // Far mountain range
+  const farPeaks: [number, number][] = [
+    [0, 0.45], [0.05, 0.25], [0.12, 0.15], [0.2, 0.21],
+    [0.3, 0.1], [0.38, 0.19], [0.48, 0.12], [0.57, 0.2],
+    [0.67, 0.08], [0.76, 0.16], [0.85, 0.22], [0.93, 0.13],
+    [1, 0.28],
+  ];
+
+  ctx.fillStyle = `rgba(38, 36, 52, ${0.55 * ambientLight + 0.2})`;
   ctx.beginPath();
   ctx.moveTo(0, H * 0.45);
-  const peaks = [
-    [0.05, 0.25], [0.15, 0.15], [0.25, 0.22], [0.35, 0.1],
-    [0.45, 0.18], [0.55, 0.12], [0.65, 0.2], [0.75, 0.08],
-    [0.85, 0.17], [0.95, 0.22], [1, 0.28],
-  ];
-  for (const [px, py] of peaks) {
-    ctx.lineTo(W * px, H * py);
-  }
-  ctx.lineTo(W, H * 0.45);
-  ctx.closePath();
-  ctx.fill();
-
-  // Near mountains
-  ctx.fillStyle = `rgba(30, 28, 42, ${0.7 * ambientLight + 0.15})`;
-  ctx.beginPath();
-  ctx.moveTo(0, H * 0.5);
-  const nearPeaks = [
-    [0, 0.35], [0.08, 0.28], [0.2, 0.22], [0.32, 0.32],
-    [0.42, 0.18], [0.5, 0.3], [1, 0.38],
-  ];
-  for (const [px, py] of nearPeaks) {
-    ctx.lineTo(W * px, H * py);
-  }
+  for (const [px, py] of farPeaks) ctx.lineTo(W * px, H * py);
   ctx.lineTo(W, H * 0.5);
   ctx.closePath();
   ctx.fill();
+
+  // Snow caps on far peaks
+  ctx.fillStyle = `rgba(230, 228, 240, ${0.4 * ambientLight + 0.1})`;
+  for (const [px, py] of farPeaks.slice(1, -1)) {
+    if (py < 0.22) {
+      const capH = (0.22 - py) * H * 0.55;
+      const baseW = capH * 0.9;
+      ctx.beginPath();
+      ctx.moveTo(W * px, H * py);
+      ctx.lineTo(W * px - baseW * 0.5, H * py + capH);
+      ctx.lineTo(W * px + baseW * 0.5, H * py + capH);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  // Near mountain range (darker, in front)
+  const nearPeaks: [number, number][] = [
+    [0, 0.5], [0.07, 0.35], [0.18, 0.27], [0.28, 0.35],
+    [0.38, 0.22], [0.48, 0.33], [0.6, 0.25], [0.72, 0.38],
+    [0.82, 0.28], [0.92, 0.34], [1, 0.4],
+  ];
+
+  ctx.fillStyle = `rgba(24, 22, 36, ${0.65 * ambientLight + 0.15})`;
+  ctx.beginPath();
+  ctx.moveTo(0, H * 0.5);
+  for (const [px, py] of nearPeaks) ctx.lineTo(W * px, H * py);
+  ctx.lineTo(W, H * 0.5);
+  ctx.closePath();
+  ctx.fill();
+
+  // Snow caps on near peaks
+  ctx.fillStyle = `rgba(220, 218, 235, ${0.35 * ambientLight + 0.08})`;
+  for (const [px, py] of nearPeaks.slice(1, -1)) {
+    if (py < 0.3) {
+      const capH = (0.3 - py) * H * 0.45;
+      const baseW = capH * 0.85;
+      ctx.beginPath();
+      ctx.moveTo(W * px, H * py);
+      ctx.lineTo(W * px - baseW * 0.5, H * py + capH);
+      ctx.lineTo(W * px + baseW * 0.5, H * py + capH);
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
 }
 
 function drawRegion(
@@ -429,28 +459,70 @@ function drawRegion(
   ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  // Add texture for forests
+  // Forest: proper pine tree silhouettes
   if (region.type === "FOREST") {
-    ctx.globalAlpha = 0.3;
-    for (let i = 0; i < 15; i++) {
-      const treex = x + (Math.cos(i * 2.1 + t * 0.05) * rx * 0.7);
-      const treey = y + (Math.sin(i * 1.7 + t * 0.03) * ry * 0.7);
-      ctx.fillStyle = "#1d4a22";
-      ctx.beginPath();
-      ctx.arc(treex, treey, 8 * scaleX, 0, Math.PI * 2);
-      ctx.fill();
+    const treePositions: [number, number][] = [];
+    for (let i = 0; i < 18; i++) {
+      const angle = (i / 18) * Math.PI * 2 + i * 0.3;
+      const dist = (0.2 + (i % 3) * 0.25) * Math.min(rx, ry);
+      treePositions.push([
+        x + Math.cos(angle) * dist,
+        y + Math.sin(angle) * dist * 0.6,
+      ]);
+    }
+    for (const [tx, ty] of treePositions) {
+      const treeH = (12 + ((tx * 7 + ty * 3) % 6)) * scaleX;
+      const sway = Math.sin(t * 0.8 + tx * 0.05) * 0.5 * scaleX;
+      // Trunk
+      ctx.globalAlpha = 0.45;
+      ctx.fillStyle = "#3d2b1a";
+      ctx.fillRect(tx - 1.2 * scaleX + sway * 0.3, ty, 2.4 * scaleX, treeH * 0.35);
+      // Layers of foliage
+      for (let layer = 0; layer < 3; layer++) {
+        const ly = ty - layer * treeH * 0.28;
+        const lw = treeH * (0.7 - layer * 0.18);
+        ctx.globalAlpha = 0.5 - layer * 0.05;
+        ctx.fillStyle = layer === 0 ? "#1a4220" : layer === 1 ? "#1e5228" : "#246030";
+        ctx.beginPath();
+        ctx.moveTo(tx + sway, ly - treeH * 0.5);
+        ctx.lineTo(tx - lw * 0.5 + sway * 0.5, ly);
+        ctx.lineTo(tx + lw * 0.5 + sway * 0.5, ly);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
   }
 
   // River effect for river basin
   if (region.type === "RIVER_BASIN") {
-    ctx.globalAlpha = 0.4;
-    ctx.strokeStyle = "#4a90d9";
-    ctx.lineWidth = 4 * scaleX;
+    ctx.globalAlpha = 0.55;
+    const riverGrad = ctx.createLinearGradient(x - rx * 0.3, y, x + rx * 0.3, y);
+    riverGrad.addColorStop(0, "#2a6ab5");
+    riverGrad.addColorStop(0.5, "#4a9fd9");
+    riverGrad.addColorStop(1, "#2a6ab5");
+    ctx.strokeStyle = riverGrad;
+    ctx.lineWidth = 5 * scaleX;
+    ctx.lineCap = "round";
+    const flow = Math.sin(t * 0.5) * 5 * scaleX;
     ctx.beginPath();
-    const ry2 = y - h * 0.2;
-    ctx.moveTo(x - rx * 0.3, ry2 - h * 0.2);
-    ctx.bezierCurveTo(x + rx * 0.1, ry2, x - rx * 0.1, ry2 + h * 0.3, x + rx * 0.3, ry2 + h * 0.5);
+    ctx.moveTo(x - rx * 0.4 + flow, y - h * 0.25);
+    ctx.bezierCurveTo(
+      x - rx * 0.1 + flow, y + h * 0.05,
+      x + rx * 0.1 - flow, y + h * 0.15,
+      x + rx * 0.4 - flow, y + h * 0.3
+    );
+    ctx.stroke();
+    // Shimmer
+    ctx.globalAlpha = 0.2;
+    ctx.strokeStyle = "rgba(200,230,255,0.8)";
+    ctx.lineWidth = 2 * scaleX;
+    ctx.beginPath();
+    ctx.moveTo(x - rx * 0.38 + flow, y - h * 0.22);
+    ctx.bezierCurveTo(
+      x - rx * 0.08 + flow, y + h * 0.06,
+      x + rx * 0.08 - flow, y + h * 0.17,
+      x + rx * 0.38 - flow, y + h * 0.28
+    );
     ctx.stroke();
   }
 
@@ -474,85 +546,168 @@ function drawSettlement(
 ) {
   const x = settlement.x * scaleX;
   const y = settlement.y * scaleY;
+  const s = Math.min(scaleX, scaleY);
 
   const sizeMap: Record<string, number> = {
-    CAMP: 8,
-    HAMLET: 12,
-    VILLAGE: 18,
-    TOWN: 25,
-    CITY: 35,
-    FORTRESS: 30,
-    RUINS: 20,
+    CAMP: 6, HAMLET: 10, VILLAGE: 15, TOWN: 22, CITY: 30, FORTRESS: 26, RUINS: 16,
   };
+  const size = (sizeMap[settlement.type] ?? 10) * s;
 
-  const size = (sizeMap[settlement.type] ?? 10) * scaleX;
-
-  // Firelight glow (night)
-  if (ambientLight < 0.6) {
-    const fireGlow = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
-    fireGlow.addColorStop(0, "rgba(220, 120, 40, 0.3)");
-    fireGlow.addColorStop(1, "rgba(220, 80, 20, 0)");
+  // Night glow
+  if (ambientLight < 0.7) {
+    const glowR = size * 4;
+    const fireGlow = ctx.createRadialGradient(x, y, 0, x, y, glowR);
+    const intensity = (0.7 - ambientLight) * 0.6;
+    fireGlow.addColorStop(0, `rgba(220, 110, 30, ${intensity})`);
+    fireGlow.addColorStop(1, "rgba(200, 70, 10, 0)");
     ctx.fillStyle = fireGlow;
     ctx.beginPath();
-    ctx.arc(x, y, size * 3, 0, Math.PI * 2);
+    ctx.arc(x, y, glowR, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Settlement body
-  const lightenedColor = lightenColor(clanColor, 0.3 * ambientLight);
-  ctx.fillStyle = lightenedColor;
-  ctx.strokeStyle = adjustBrightness(clanColor, 0.6);
-  ctx.lineWidth = 1 * scaleX;
+  const wallColor = lightenColor(clanColor, 0.2 * ambientLight + 0.05);
+  const roofColor = adjustBrightness(clanColor, 0.45 + 0.25 * ambientLight);
+  ctx.strokeStyle = adjustBrightness(clanColor, 0.35);
+  ctx.lineWidth = 1 * s;
 
   if (settlement.type === "CAMP") {
-    // Triangle tent
-    ctx.beginPath();
-    ctx.moveTo(x, y - size);
-    ctx.lineTo(x - size * 0.8, y + size * 0.5);
-    ctx.lineTo(x + size * 0.8, y + size * 0.5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-  } else if (settlement.type === "FORTRESS") {
-    // Square with battlements
-    ctx.fillRect(x - size, y - size, size * 2, size * 2);
-    ctx.strokeRect(x - size, y - size, size * 2, size * 2);
-    // Towers
-    ctx.fillRect(x - size - 4 * scaleX, y - size, 8 * scaleX, 10 * scaleX);
-    ctx.fillRect(x + size - 4 * scaleX, y - size, 8 * scaleX, 10 * scaleX);
-  } else {
-    // Rounded settlement
-    ctx.beginPath();
-    ctx.arc(x, y, size, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    // 2-3 tents
+    for (let i = -1; i <= 1; i++) {
+      const tx = x + i * size * 0.9;
+      const th = size * (i === 0 ? 1.2 : 0.9);
+      ctx.fillStyle = i === 0 ? wallColor : adjustBrightness(clanColor, 0.5);
+      ctx.beginPath();
+      ctx.moveTo(tx, y - th);
+      ctx.lineTo(tx - th * 0.7, y + th * 0.3);
+      ctx.lineTo(tx + th * 0.7, y + th * 0.3);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
 
-    // Inner structures
-    const structCount = Math.min(Math.floor(settlement.population / 3), 8);
-    for (let i = 0; i < structCount; i++) {
-      const angle = (i / structCount) * Math.PI * 2;
-      const dist = size * 0.55;
-      const sx = x + Math.cos(angle) * dist;
-      const sy = y + Math.sin(angle) * dist;
-      ctx.fillStyle = darkenColor(clanColor, 0.5);
-      ctx.fillRect(sx - 2 * scaleX, sy - 2 * scaleY, 4 * scaleX, 4 * scaleY);
+  } else if (settlement.type === "FORTRESS") {
+    // Thick walls
+    ctx.fillStyle = wallColor;
+    ctx.fillRect(x - size, y - size * 0.8, size * 2, size * 1.6);
+    ctx.strokeRect(x - size, y - size * 0.8, size * 2, size * 1.6);
+    // Corner towers
+    for (const [tx, ty] of [[x - size, y - size * 0.8], [x + size, y - size * 0.8]] as [number, number][]) {
+      ctx.fillStyle = lightenColor(clanColor, 0.1);
+      ctx.fillRect(tx - size * 0.22, ty - size * 0.4, size * 0.44, size * 1.2);
+      ctx.strokeRect(tx - size * 0.22, ty - size * 0.4, size * 0.44, size * 1.2);
+      // Battlements
+      for (let bi = 0; bi < 3; bi++) {
+        ctx.fillStyle = wallColor;
+        ctx.fillRect(tx - size * 0.22 + bi * size * 0.15, ty - size * 0.55, size * 0.1, size * 0.18);
+      }
+    }
+    // Gate
+    ctx.fillStyle = "rgba(10,8,5,0.7)";
+    ctx.beginPath();
+    ctx.arc(x, y + size * 0.2, size * 0.22, Math.PI, 0);
+    ctx.rect(x - size * 0.22, y + size * 0.2, size * 0.44, size * 0.4);
+    ctx.fill();
+
+  } else if (settlement.type === "RUINS") {
+    // Crumbled walls
+    ctx.fillStyle = "rgba(90,80,70,0.6)";
+    const ruinPts: [number, number, number, number][] = [
+      [x - size, y, size * 0.35, size * 0.7],
+      [x - size * 0.3, y - size * 0.5, size * 0.3, size * 0.5],
+      [x + size * 0.4, y - size * 0.3, size * 0.4, size * 0.55],
+      [x + size * 0.1, y, size * 0.5, size * 0.35],
+    ];
+    for (const [rx, ry, rw, rh] of ruinPts) {
+      ctx.fillRect(rx, ry, rw, rh);
+    }
+
+  } else {
+    // Village / Hamlet / Town / City — cluster of houses
+    const houseCount = settlement.type === "CITY" ? 9 : settlement.type === "TOWN" ? 6 : settlement.type === "VILLAGE" ? 4 : 2;
+    const angles = Array.from({ length: houseCount }, (_, i) => (i / houseCount) * Math.PI * 2);
+    const spread = size * 0.75;
+
+    for (let i = 0; i < houseCount; i++) {
+      const hx = i === 0 ? x : x + Math.cos(angles[i]) * spread;
+      const hy = i === 0 ? y : y + Math.sin(angles[i]) * spread * 0.7;
+      const hw = size * (i === 0 ? 0.55 : 0.38);
+      const hh = size * (i === 0 ? 0.5 : 0.35);
+      const roofH = hh * 0.7;
+
+      // Walls
+      ctx.fillStyle = i === 0 ? wallColor : adjustBrightness(clanColor, 0.55 + 0.2 * ambientLight);
+      ctx.strokeStyle = adjustBrightness(clanColor, 0.35);
+      ctx.fillRect(hx - hw, hy - hh * 0.5, hw * 2, hh);
+      ctx.strokeRect(hx - hw, hy - hh * 0.5, hw * 2, hh);
+
+      // Roof (triangle)
+      ctx.fillStyle = roofColor;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy - hh * 0.5 - roofH);
+      ctx.lineTo(hx - hw * 1.1, hy - hh * 0.5);
+      ctx.lineTo(hx + hw * 1.1, hy - hh * 0.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Window
+      ctx.fillStyle = ambientLight < 0.5 ? "rgba(255, 200, 80, 0.7)" : "rgba(160,140,100,0.5)";
+      ctx.fillRect(hx - hw * 0.25, hy - hh * 0.25, hw * 0.5, hh * 0.35);
+
+      // Chimney smoke
+      if (i === 0 || i === 1) {
+        const chimneyX = hx + hw * 0.5;
+        const chimneyBaseY = hy - hh * 0.5 - roofH * 0.55;
+        ctx.strokeStyle = adjustBrightness(clanColor, 0.4);
+        ctx.lineWidth = 1.5 * s;
+        ctx.strokeRect(chimneyX - 1.5 * s, chimneyBaseY - 3 * s, 3 * s, 3 * s);
+
+        // Animated smoke puffs
+        const smokeAlpha = ambientLight < 0.6 ? 0.45 : 0.2;
+        for (let p = 0; p < 3; p++) {
+          const pAge = ((t * 0.4 + p * 0.33 + settlement.x * 0.01) % 1);
+          const px = chimneyX + Math.sin(pAge * 5 + p) * 3 * s;
+          const py = chimneyBaseY - pAge * 18 * s;
+          const pr = (2 + pAge * 4) * s;
+          ctx.globalAlpha = smokeAlpha * (1 - pAge);
+          ctx.fillStyle = "rgba(180,170,165,1)";
+          ctx.beginPath();
+          ctx.arc(px, py, pr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1 * s;
+      }
     }
   }
 
-  // Fire/smoke
-  if (settlement.type !== "RUINS") {
-    const flicker = Math.sin(t * 8 + settlement.x) * 0.3 + 0.7;
-    ctx.fillStyle = `rgba(255, 140, 30, ${0.7 * flicker * (ambientLight < 0.5 ? 1 : 0.5)})`;
+  // Central fire for camps at night
+  if (settlement.type === "CAMP" && ambientLight < 0.6) {
+    const flicker = Math.sin(t * 9 + settlement.x) * 0.3 + 0.7;
+    ctx.fillStyle = `rgba(255, 140, 30, ${0.8 * flicker})`;
     ctx.beginPath();
-    ctx.arc(x, y - size * 0.5, 3 * scaleX, 0, Math.PI * 2);
+    ctx.arc(x, y + size * 0.15, 3.5 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 220, 80, ${0.9 * flicker})`;
+    ctx.beginPath();
+    ctx.arc(x, y + size * 0.1, 1.8 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
   // Label
-  ctx.fillStyle = `rgba(220, 210, 200, ${0.7 * ambientLight + 0.2})`;
-  ctx.font = `${9 * scaleX}px var(--font-display, Georgia, serif)`;
+  const labelY = y + size + 13 * s;
+  ctx.save();
+  ctx.font = `${10 * s}px var(--font-display, Georgia, serif)`;
   ctx.textAlign = "center";
-  ctx.fillText(settlement.name, x, y + size + 12 * scaleY);
+  const lw = ctx.measureText(settlement.name).width;
+  ctx.fillStyle = "rgba(5,5,15,0.55)";
+  ctx.beginPath();
+  ctx.roundRect(x - lw / 2 - 3, labelY - 9, lw + 6, 11, 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(220, 210, 190, ${0.6 * ambientLight + 0.3})`;
+  ctx.fillText(settlement.name, x, labelY);
+  ctx.restore();
 }
 
 function drawBeing(
@@ -568,54 +723,161 @@ function drawBeing(
 ) {
   const x = being.x * scaleX;
   const y = being.y * scaleY;
-  const pulse = Math.sin(t * 3 + being.x * 0.1) * 0.2 + 0.8;
-  const size = (being.isCore ? 6 : 4) * scaleX;
-  const statusColor = getBeingStatusColor(being as SimBeing);
+  const seed = being.x * 0.37 + being.y * 0.19;
+  const walkCycle = t * 2.5 + seed;
+  const bobY = Math.sin(walkCycle) * 1.2 * scaleY;
+  const legSwing = Math.sin(walkCycle) * 0.35;
+  const armSwing = Math.sin(walkCycle + Math.PI) * 0.3;
 
-  // Selection ring
-  if (isSelected) {
-    ctx.strokeStyle = "#c9a050";
-    ctx.lineWidth = 2 * scaleX;
-    ctx.beginPath();
-    ctx.arc(x, y, size + 5 * scaleX, 0, Math.PI * 2);
-    ctx.stroke();
-  }
+  // Scale for core vs regular
+  const s = (being.isCore ? 1.5 : 1.0) * Math.min(scaleX, scaleY);
 
-  // Hover ring
-  if (isHovered && !isSelected) {
-    ctx.strokeStyle = "rgba(255,255,255,0.5)";
-    ctx.lineWidth = 1 * scaleX;
-    ctx.beginPath();
-    ctx.arc(x, y, size + 4 * scaleX, 0, Math.PI * 2);
-    ctx.stroke();
-  }
+  // Head radius, body measurements
+  const headR = 4 * s;
+  const shoulderY = y + bobY + headR * 2.2;
+  const hipY = shoulderY + 9 * s;
+  const groundY = hipY + 9 * s;
+  const cx = x;
+  const headY = y + bobY;
 
   // Glow for core beings
   if (being.isCore) {
-    const glow = ctx.createRadialGradient(x, y, 0, x, y, size * 3);
-    glow.addColorStop(0, `${clanColor}60`);
+    const glow = ctx.createRadialGradient(cx, headY, 0, cx, headY, headR * 5);
+    glow.addColorStop(0, `${clanColor}55`);
     glow.addColorStop(1, "transparent");
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(x, y, size * 3, 0, Math.PI * 2);
+    ctx.arc(cx, headY, headR * 5, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  // Being dot
-  ctx.globalAlpha = 0.6 + pulse * 0.4;
-  ctx.fillStyle = statusColor;
-  ctx.beginPath();
-  ctx.arc(x, y, size * pulse, 0, Math.PI * 2);
-  ctx.fill();
+  // Selection ring (ground)
+  if (isSelected) {
+    ctx.strokeStyle = "#c9a050";
+    ctx.lineWidth = 1.5 * s;
+    ctx.beginPath();
+    ctx.ellipse(cx, groundY, headR * 2.5, headR * 0.6, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
-  // Clan color inner dot
-  ctx.globalAlpha = 0.8;
-  ctx.fillStyle = clanColor;
-  ctx.beginPath();
-  ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
-  ctx.fill();
+  // Hover ring (ground)
+  if (isHovered && !isSelected) {
+    ctx.strokeStyle = "rgba(255,255,255,0.4)";
+    ctx.lineWidth = 1 * s;
+    ctx.beginPath();
+    ctx.ellipse(cx, groundY, headR * 2.2, headR * 0.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+  }
 
-  ctx.globalAlpha = 1;
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4);
+
+  const strokeW = Math.max(1.2, 1.5 * s);
+  ctx.lineWidth = strokeW;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
+  // Shadow / ground dot
+  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4) * 0.3;
+  ctx.fillStyle = "rgba(0,0,0,0.5)";
+  ctx.beginPath();
+  ctx.ellipse(cx, groundY + 1 * s, headR * 1.6, headR * 0.35, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = Math.min(1, 0.6 + ambientLight * 0.4);
+
+  // Legs
+  ctx.strokeStyle = adjustBrightness(clanColor, 0.65);
+  // Left leg
+  ctx.beginPath();
+  ctx.moveTo(cx - 2 * s, hipY);
+  const lLegMidX = cx - 2 * s + Math.sin(legSwing) * 3 * s;
+  const lLegMidY = hipY + 5 * s;
+  ctx.quadraticCurveTo(lLegMidX, lLegMidY, cx - 2 * s + Math.sin(legSwing) * 4 * s, groundY);
+  ctx.stroke();
+  // Right leg
+  ctx.beginPath();
+  ctx.moveTo(cx + 2 * s, hipY);
+  const rLegMidX = cx + 2 * s + Math.sin(-legSwing) * 3 * s;
+  ctx.quadraticCurveTo(rLegMidX, hipY + 5 * s, cx + 2 * s + Math.sin(-legSwing) * 4 * s, groundY);
+  ctx.stroke();
+
+  // Body
+  ctx.strokeStyle = clanColor;
+  ctx.beginPath();
+  ctx.moveTo(cx, shoulderY);
+  ctx.lineTo(cx, hipY);
+  ctx.stroke();
+
+  // Arms
+  ctx.strokeStyle = adjustBrightness(clanColor, 0.75);
+  const armLen = 6 * s;
+  // Left arm
+  ctx.beginPath();
+  ctx.moveTo(cx, shoulderY + 2 * s);
+  ctx.lineTo(cx - armLen + Math.sin(armSwing) * 3 * s, shoulderY + armLen + Math.sin(armSwing) * 2 * s);
+  ctx.stroke();
+  // Right arm
+  ctx.beginPath();
+  ctx.moveTo(cx, shoulderY + 2 * s);
+  ctx.lineTo(cx + armLen + Math.sin(-armSwing) * 3 * s, shoulderY + armLen + Math.sin(-armSwing) * 2 * s);
+  ctx.stroke();
+
+  // Head
+  const headColor = lightenColor(clanColor, 0.4);
+  ctx.fillStyle = headColor;
+  ctx.strokeStyle = adjustBrightness(clanColor, 0.5);
+  ctx.lineWidth = strokeW * 0.8;
+  ctx.beginPath();
+  ctx.arc(cx, headY, headR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Eyes (tiny dots for core beings)
+  if (being.isCore) {
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.beginPath();
+    ctx.arc(cx - headR * 0.32, headY - headR * 0.1, headR * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + headR * 0.32, headY - headR * 0.1, headR * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+
+  // Name label (always for core, only on hover/select for others)
+  if (being.isCore || isSelected || isHovered) {
+    const labelY = headY - headR - 5 * s;
+    ctx.save();
+    ctx.font = `${being.isCore ? 10 : 8}px var(--font-display, Georgia, serif)`;
+    ctx.textAlign = "center";
+    const tw = ctx.measureText(being.name).width;
+    ctx.fillStyle = "rgba(8,8,20,0.7)";
+    ctx.beginPath();
+    ctx.roundRect(cx - tw / 2 - 3, labelY - 10, tw + 6, 13, 3);
+    ctx.fill();
+    ctx.fillStyle = being.isCore ? "#e8d5a0" : "rgba(220,210,200,0.9)";
+    ctx.fillText(being.name, cx, labelY);
+    ctx.restore();
+  }
+
+  // Action bubble for selected/hovered
+  if ((isSelected || isHovered) && being.currentAction) {
+    const bubbleY = headY - headR - 24 * s;
+    ctx.save();
+    ctx.font = `italic ${8}px var(--font-body, sans-serif)`;
+    ctx.textAlign = "center";
+    const tw = Math.min(ctx.measureText(being.currentAction).width, 100);
+    ctx.fillStyle = "rgba(8,8,20,0.75)";
+    ctx.beginPath();
+    ctx.roundRect(cx - tw / 2 - 4, bubbleY - 10, tw + 8, 12, 4);
+    ctx.fill();
+    ctx.fillStyle = "#c8a060";
+    // Trim long actions
+    const action = being.currentAction.length > 22 ? being.currentAction.slice(0, 22) + "…" : being.currentAction;
+    ctx.fillText(action, cx, bubbleY);
+    ctx.restore();
+  }
 }
 
 function drawWeather(
