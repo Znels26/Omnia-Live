@@ -20,8 +20,8 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   return (
     <div className="flex min-h-screen bg-fv-base">
       <Sidebar isAdmin />
-      <div className="flex-1 ml-[200px]">
-        <div className="h-12 bg-fv-surface border-b border-fv-border flex items-center px-6 gap-3">
+      <div className="flex-1 md:ml-[200px]">
+        <div className="h-12 bg-fv-surface border-b border-fv-border flex items-center px-4 md:px-6 gap-3">
           <span className="text-xs text-fv-ember font-display font-semibold tracking-wider uppercase">Admin</span>
           <span className="text-fv-border">·</span>
           <span className="text-xs text-fv-text-muted">First Valley Control Center</span>
