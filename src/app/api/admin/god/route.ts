@@ -63,14 +63,83 @@ export async function POST(req: NextRequest) {
     // ── World controls ──────────────────────────────────────────────────────
 
     case 'RESTART_WORLD': {
-      // Reset day/year, set status active, clear events
+      // 1. Wipe all events for this world
+      await db.from('public_events').delete().eq('world_id', worldId)
+
+      // 2. Reset world row — clean config, day 1 year 1
       await db.from('worlds').update({
         in_game_day: 1,
         in_game_year: 1,
+        era: 'Dawn Age',
         status: 'active',
-        config: { ...worldConfig, world_time: 8 },
+        config: {
+          season: 'spring',
+          weather: 'clear',
+        },
       }).eq('id', worldId)
-      return NextResponse.json({ ok: true, message: 'World restarted to Day 1, Year 1' })
+
+      // 3. Fetch all persons for this world (alive or dead)
+      const { data: allPersons } = await db
+        .from('persons')
+        .select('id, residence_id')
+        .eq('world_id', worldId)
+
+      // 4. Fetch settlements so we can scatter persons back near their home
+      const { data: allSettlements } = await db
+        .from('settlements')
+        .select('id, position_x, position_y')
+        .eq('world_id', worldId)
+      const settlementMap = new Map(
+        (allSettlements ?? []).map(s => [s.id, { x: Number(s.position_x), y: Number(s.position_y) }])
+      )
+
+      // 5. Reset every person to full health, alive, clean metadata
+      if (allPersons?.length) {
+        for (let i = 0; i < allPersons.length; i += 30) {
+          const chunk = allPersons.slice(i, i + 30)
+          await Promise.all(chunk.map(p => {
+            const home = p.residence_id ? settlementMap.get(p.residence_id) : null
+            const hx = home?.x ?? 400
+            const hy = home?.y ?? 380
+            // Scatter slightly around home
+            const angle = Math.random() * Math.PI * 2
+            const dist = 20 + Math.random() * 40
+            return db.from('persons').update({
+              is_alive: true,
+              health_score: 85 + Math.floor(Math.random() * 15),
+              happiness_score: 60 + Math.floor(Math.random() * 20),
+              need_hunger: Math.floor(Math.random() * 15),
+              need_fatigue: Math.floor(Math.random() * 15),
+              need_stress: Math.floor(Math.random() * 10),
+              need_hope: Math.floor(Math.random() * 10),
+              current_action: null,
+              current_goal: null,
+              pos_x: Math.round(Math.max(30, Math.min(770, hx + Math.cos(angle) * dist))),
+              pos_y: Math.round(Math.max(50, Math.min(510, hy + Math.sin(angle) * dist * 0.7))),
+              metadata: {},
+            }).eq('id', p.id)
+          }))
+        }
+      }
+
+      // 6. Insert a single genesis event
+      await db.from('public_events').insert({
+        world_id: worldId,
+        event_type: 'CUSTOM',
+        title: 'The world begins again',
+        description: 'The valley wakes. The old history is gone. Everything starts fresh.',
+        significance_score: 100,
+        is_milestone: true,
+        is_featured: true,
+        in_game_day: 1,
+        in_game_year: 1,
+        metadata: { source: 'restart' },
+      })
+
+      return NextResponse.json({
+        ok: true,
+        message: `World reset. ${allPersons?.length ?? 0} characters restored. All events cleared.`,
+      })
     }
 
     case 'PAUSE_WORLD': {
