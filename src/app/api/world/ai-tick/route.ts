@@ -17,11 +17,21 @@ export async function POST() {
 
     const { data: world } = await db
       .from('worlds')
-      .select('id, in_game_day, in_game_year')
+      .select('id, in_game_day, in_game_year, config')
       .eq('slug', 'first-valley')
       .single()
 
     if (!world) return NextResponse.json({ error: 'World not found' }, { status: 404 })
+
+    // Build active crisis context from world config
+    const config = (world.config ?? {}) as Record<string, unknown>
+    const crisisLines: string[] = []
+    const war = config.war as Record<string, unknown> | undefined
+    if (war?.active) crisisLines.push(`WAR: Open conflict between ${war.clanA} and ${war.clanB} over ${war.reason ?? 'territory'}. People are fighting and dying.`)
+    const weather = typeof config.weather === 'string' ? config.weather : (config.weather as Record<string, unknown> | undefined)?.type
+    if (weather && weather !== 'clear') crisisLines.push(`WEATHER: ${weather === 'storm' ? 'A violent storm is raging' : weather === 'drought' ? 'Severe drought — water is scarce' : weather === 'plague' ? 'Plague is spreading' : `${weather} conditions`}.`)
+    const season = typeof config.season === 'string' ? config.season : (config.season as Record<string, unknown> | undefined)?.name
+    const activeCrisis = crisisLines.join(' ')
 
     const [{ data: allPersons }, { data: cultures }, { data: recentEvents }] = await Promise.all([
       db.from('persons')
@@ -55,7 +65,7 @@ export async function POST() {
 
     // Phase 1: Individual AI decisions for core characters
     const decisionResults = await Promise.allSettled(
-      corePersons.map(p => decideForPerson(p, recentEvents ?? [], cultures ?? [], eraMap, world, db))
+      corePersons.map(p => decideForPerson(p, recentEvents ?? [], cultures ?? [], eraMap, world, db, activeCrisis, season as string | undefined))
     )
 
     // Phase 2: Character interactions (proximity-based, max 4 per tick)
@@ -65,7 +75,8 @@ export async function POST() {
       eraMap,
       recentEvents ?? [],
       world,
-      db
+      db,
+      activeCrisis
     )
 
     return NextResponse.json({
@@ -89,7 +100,9 @@ async function decideForPerson(
   cultures: Record<string, unknown>[],
   eraMap: Record<string, string>,
   world: { id: string; in_game_day: number; in_game_year: number },
-  db: ReturnType<typeof createAdminClient>
+  db: ReturnType<typeof createAdminClient>,
+  activeCrisis?: string,
+  season?: string
 ) {
   const meta = (person.metadata as Record<string, unknown>) ?? {}
   const memories: Array<{ description: string; day: number }> =
@@ -135,18 +148,22 @@ async function decideForPerson(
     Number(person.need_hope) > 65 && 'losing hope',
   ].filter(Boolean).join(', ') || 'feeling okay'
 
+  const crisisBlock = activeCrisis
+    ? `\n⚠️ ACTIVE CRISIS — this MUST shape ${person.name}'s response:\n${activeCrisis}\n`
+    : ''
+
   const userPrompt = `Character: ${person.name}, age ${person.age}, ${person.occupation || 'villager'} of the ${(culture?.name as string) ?? 'valley'}.
-Era: ${era}.
+Era: ${era}. Season: ${season ?? 'spring'}.
 Day ${world.in_game_day}, Year ${world.in_game_year}.
 Personality: ${traits}. State: ${pressing}. Health ${person.health_score}%. Happiness ${person.happiness_score}%.
 Skills: ${skillSummary}.
 ${person.current_goal ? `Ongoing goal: "${person.current_goal}"` : ''}
-
+${crisisBlock}
 ${personalEvents.length ? `Recent personal events:\n${personalEvents.map(e => `- ${e.title} (day ${e.in_game_day})`).join('\n')}` : ''}
 ${worldEvents.length ? `\nWorld events:\n${worldEvents.map(e => `- ${e.title}`).join('\n')}` : ''}
 ${memories.length ? `\nMemories:\n${memories.map(m => `- ${m.description} (day ${m.day})`).join('\n')}` : ''}
 
-What is ${person.name} doing and thinking RIGHT NOW? Be specific to their skills and era. Reply ONLY with valid JSON:
+What is ${person.name} doing and thinking RIGHT NOW?${activeCrisis ? ` They MUST be actively responding to the crisis — not ignoring it.` : ''} Be specific to their skills, personality, and era. Reply ONLY with valid JSON:
 {"action":"present-tense activity 5-8 words","goal":"what they want most right now 8-12 words","thought":"a vivid inner thought reflecting their life 10-15 words"}`
 
   let parsed: { action?: string; goal?: string; thought?: string } = {}
@@ -195,7 +212,8 @@ async function runInteractions(
   eraMap: Record<string, string>,
   recentEvents: Record<string, unknown>[],
   world: { id: string; in_game_day: number; in_game_year: number },
-  db: ReturnType<typeof createAdminClient>
+  db: ReturnType<typeof createAdminClient>,
+  activeCrisis?: string
 ): Promise<number> {
   // Find pairs of persons within proximity (~100px)
   const alive = allPersons.filter(p => (p as Record<string, unknown>).is_alive !== false)
@@ -220,7 +238,7 @@ async function runInteractions(
     .slice(0, 3)
 
   const results = await Promise.allSettled(
-    selected.map(([a, b]) => interactPair(a, b, cultures, eraMap, recentEvents, world, db))
+    selected.map(([a, b]) => interactPair(a, b, cultures, eraMap, recentEvents, world, db, activeCrisis))
   )
 
   return results.filter(r => r.status === 'fulfilled').length
@@ -233,7 +251,8 @@ async function interactPair(
   eraMap: Record<string, string>,
   recentEvents: Record<string, unknown>[],
   world: { id: string; in_game_day: number; in_game_year: number },
-  db: ReturnType<typeof createAdminClient>
+  db: ReturnType<typeof createAdminClient>,
+  activeCrisis?: string
 ) {
   const cultureA = cultures.find(c => c.id === personA.culture_id)
   const cultureB = cultures.find(c => c.id === personB.culture_id)
@@ -255,11 +274,13 @@ async function interactPair(
     ? `${relationship.relationship_type} (trust: ${relationship.trust}/10, resentment: ${relationship.resentment}/10)`
     : 'strangers'
 
+  const crisisContext = activeCrisis ? `\nCRISIS CONTEXT: ${activeCrisis} Their interaction MUST reflect this reality.\n` : ''
+
   const prompt = `Two people encounter each other in First Valley (${era}, Day ${world.in_game_day}).
 
 ${personA.name} (age ${personA.age}, ${personA.occupation || 'villager'}, ${(cultureA?.name as string) ?? 'valley'}, skills: ${skillsA})
 ${personB.name} (age ${personB.age}, ${personB.occupation || 'villager'}, ${(cultureB?.name as string) ?? 'valley'}, skills: ${skillsB})
-Relationship: ${relDesc}. Same clan: ${sameClan}.
+Relationship: ${relDesc}. Same clan: ${sameClan}.${crisisContext}
 
 What happens in this brief encounter? Reply ONLY with valid JSON:
 {

@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import Anthropic from '@anthropic-ai/sdk'
+import type { Json } from '@/types/database'
+
+const anthropic = new Anthropic()
 
 const GOD_EMAIL = 'zacharynelson96@gmail.com'
 
@@ -53,9 +57,11 @@ export async function POST(req: NextRequest) {
   const db = createAdminClient()
 
   // Fetch world id once
-  const { data: worldRow } = await db.from('worlds').select('id, config').eq('slug', 'first-valley').single()
+  const { data: worldRow } = await db.from('worlds').select('id, config, in_game_day, in_game_year').eq('slug', 'first-valley').single()
   if (!worldRow) return NextResponse.json({ error: 'World not found' }, { status: 404 })
   const worldId = worldRow.id
+  const worldDay = worldRow.in_game_day ?? 1
+  const worldYear = worldRow.in_game_year ?? 1
   const worldConfig = (worldRow.config ?? {}) as Record<string, unknown>
 
   switch (body.action) {
@@ -180,6 +186,10 @@ export async function POST(req: NextRequest) {
       }
       const desc = descs[weather] ?? `The weather shifts to ${weather}.`
       await insertGodEvent(db, worldId, `Weather changes: ${weather}`, desc, 'WEATHER', 60)
+      // Trigger consciousness reaction for storm/snow/drought
+      if (['storm', 'snow', 'drought', 'heatwave'].includes(weather)) {
+        triggerConsciousnessReaction(db, worldId, worldDay, worldYear, 'storm', desc).catch(console.error)
+      }
       return NextResponse.json({ ok: true, message: `Weather set to ${weather}` })
     }
 
@@ -198,6 +208,11 @@ export async function POST(req: NextRequest) {
       await db.from('worlds').update({
         config: { ...worldConfig, war: { clanA, clanB, reason, active: true } }
       }).eq('id', worldId)
+      // Every being reacts to war immediately
+      triggerConsciousnessReaction(
+        db, worldId, worldDay, worldYear, 'war',
+        `Open war has broken out between ${clanA} and ${clanB} over ${reason}. The valley is no longer safe.`
+      ).catch(console.error)
       return NextResponse.json({ ok: true, message: `War started between ${clanA} and ${clanB}` })
     }
 
@@ -279,6 +294,7 @@ export async function POST(req: NextRequest) {
         }
       }
       await insertGodEvent(db, worldId, `A ${severity} plague strikes the valley`, desc, 'PLAGUE', 95)
+      triggerConsciousnessReaction(db, worldId, worldDay, worldYear, 'plague', desc).catch(console.error)
       return NextResponse.json({ ok: true, message: `${severity} plague triggered` })
     }
 
@@ -293,12 +309,9 @@ export async function POST(req: NextRequest) {
           ))
         }
       }
-      await insertGodEvent(
-        db, worldId,
-        'Famine grips the valley',
-        'The stores run empty. Children cry with hunger. The coming weeks will test every soul.',
-        'FAMINE', 90
-      )
+      const famineDesc = 'The stores run empty. Children cry with hunger. The coming weeks will test every soul.'
+      await insertGodEvent(db, worldId, 'Famine grips the valley', famineDesc, 'FAMINE', 90)
+      triggerConsciousnessReaction(db, worldId, worldDay, worldYear, 'famine', famineDesc).catch(console.error)
       return NextResponse.json({ ok: true, message: 'Famine triggered' })
     }
 
@@ -322,6 +335,161 @@ export async function POST(req: NextRequest) {
     default:
       return NextResponse.json({ error: `Unknown action: ${body.action}` }, { status: 400 })
   }
+}
+
+// ---------------------------------------------------------------------------
+// Consciousness cascade — called after major god actions so beings react
+// ---------------------------------------------------------------------------
+
+// Deterministic action pools per occupation × crisis type
+const CRISIS_ACTIONS: Record<string, Record<string, string[]>> = {
+  plague: {
+    healer:  ['treating the sick with trembling hands', 'boiling herbs as fast as the fire allows', 'moving between the dying, refusing to stop'],
+    hunter:  ['keeping away from the settlement, watching from distance', 'hunting alone, afraid to return', 'tracking the edge of the forest, uneasy'],
+    farmer:  ['burning the infected stores of grain', 'boiling every drop of water before drinking', 'keeping children inside the shelter'],
+    guard:   ['turning away strangers at the settlement edge', 'burning the belongings of the dead', 'patrolling with cloth wrapped over their face'],
+    trader:  ['refusing to trade, turning away all outsiders', 'burying their goods before plague reaches them', 'counting who is still alive among their contacts'],
+    scout:   ['scouting for healthy settlements to flee toward', 'watching the sick from a safe distance', 'tracking how far the illness has spread'],
+    crafter: ['making masks and wrappings for protection', 'boarding up their workshop', 'working alone, letting no one near'],
+    fisher:  ['staying on the water, away from the sick', 'fishing all day to feed those too weak to work', 'avoiding the settlement shores'],
+    default: ['staying inside, afraid to breathe', 'praying for the sickness to pass', 'watching the horizon for any sign of hope'],
+  },
+  war: {
+    hunter:  ['stalking the enemy through the trees', 'setting ambushes along the forest paths', 'tracking enemy movements from the ridge'],
+    guard:   ['standing at the settlement walls, spear in hand', 'drilling the young men for battle', 'reinforcing the palisade through the night'],
+    farmer:  ['hiding stores of food underground', 'moving the children away from the fighting', 'digging a shelter beneath the grain stores'],
+    healer:  ['preparing bandages and poultices for the wounded', 'setting up a healing space away from the battle', 'tending to the first of the wounded'],
+    trader:  ['hiding valuable goods before raiders arrive', 'negotiating desperately for a truce', 'calculating what the war will cost the settlement'],
+    scout:   ['tracking enemy forces through the valley', 'reporting positions back to the settlement', 'moving through the forest unseen'],
+    crafter: ['hammering spear points all through the night', 'repairing armor and weapons brought to them', 'forging what is needed for the fight ahead'],
+    fisher:  ['hiding boats in the reeds', 'watching the river crossings for enemies', 'supplying fish to feed the fighters'],
+    default: ['hiding with family inside the shelter', 'watching the smoke on the horizon in fear', 'clutching their children and waiting'],
+  },
+  famine: {
+    hunter:  ['tracking through empty forest all day, finding nothing', 'pushing deeper into unknown territory for game', 'setting every trap they know in desperate hope'],
+    farmer:  ['digging through dry ground for any root or seed', 'planting in every patch of soil they can find', 'rationing the last of the stored grain'],
+    healer:  ['identifying every wild plant that can be eaten', 'treating the malnourished children', 'watching the weakest members with heavy worry'],
+    guard:   ['standing watch over the dwindling food stores', 'enforcing fair rationing through argument and authority', 'keeping desperate people from stealing the last grain'],
+    trader:  ['trading everything they have for a sack of grain', 'traveling far to find food', 'negotiating with distant settlements for emergency supplies'],
+    scout:   ['searching every valley and hillside for food sources', 'tracking animals through increasingly empty land', 'scouting for settlements that still have stores to trade'],
+    crafter: ['fashioning better tools for foraging and hunting', 'making traps and nets from whatever they can find', 'repairing everything that needs fixing, hungry and focused'],
+    fisher:  ['fishing from before dawn to after dark', 'teaching others to fish who have never tried', 'pulling every net and line they own through the water'],
+    default: ['searching the hillsides for anything to eat', 'sharing what little remains with the children first', 'watching the sky and praying for rain'],
+  },
+  storm: {
+    default: ['sheltering inside, listening to the wind tear at the walls', 'checking on neighbors through the driving rain', 'securing the roof before it lifts away'],
+    guard:   ['securing the settlement gates against the storm', 'checking on the most exposed shelters', 'keeping watch from the doorway'],
+    healer:  ['tending to those hurt by flying debris', 'checking on the elderly and very young', 'keeping a fire lit through the storm'],
+    fisher:  ['pulling boats up from the water frantically', 'watching in horror as waves take the nets', 'lashing everything to the posts and praying'],
+  },
+}
+
+function getCrisisAction(occupation: string | null, crisisType: string): string {
+  const occ = (occupation ?? 'default').toLowerCase()
+  const pool = CRISIS_ACTIONS[crisisType] ?? {}
+  const key = Object.keys(pool).find(k => occ.includes(k)) ?? 'default'
+  const actions = pool[key] ?? pool['default'] ?? ['watching the crisis unfold in fear']
+  return actions[Math.floor(Math.random() * actions.length)]
+}
+
+async function triggerConsciousnessReaction(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  worldDay: number,
+  worldYear: number,
+  crisisType: 'plague' | 'war' | 'famine' | 'storm' | string,
+  crisisDescription: string
+) {
+  // Fetch all alive persons
+  const { data: alive } = await db
+    .from('persons')
+    .select('id, name, age, occupation, is_featured, health_score, need_stress, trait_aggression, trait_sociability, trait_spirituality, metadata, current_goal')
+    .eq('world_id', worldId)
+    .eq('is_alive', true)
+    .limit(200)
+
+  if (!alive?.length) return
+
+  const featured = alive.filter(p => p.is_featured)
+
+  // 1. Update ALL persons with deterministic crisis actions (fast, no AI)
+  for (let i = 0; i < alive.length; i += 30) {
+    const chunk = alive.slice(i, i + 30)
+    await Promise.all(chunk.map(p =>
+      db.from('persons').update({
+        current_action: getCrisisAction(p.occupation, crisisType),
+        need_stress: Math.min(100, (p.need_stress ?? 20) + 25),
+      }).eq('id', p.id)
+    ))
+  }
+
+  // 2. For featured characters: run Claude Haiku for rich personal reactions
+  //    and generate a personal event for each
+  const reactionPromises = featured.slice(0, 6).map(async (person) => {
+    try {
+      const meta = (person.metadata as Record<string, unknown>) ?? {}
+
+      const msg = await anthropic.messages.create({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 200,
+        system: `You simulate a conscious Stone Age person experiencing a crisis. Be visceral, specific, and human. No modern language. Reply ONLY with valid JSON.`,
+        messages: [{
+          role: 'user',
+          content: `${person.name}, age ${person.age}, ${person.occupation ?? 'villager'}.
+CRISIS: ${crisisDescription}
+Their nature: aggression ${person.trait_aggression ?? 5}/10, social ${person.trait_sociability ?? 5}/10, spiritual ${person.trait_spirituality ?? 5}/10.
+Health: ${Math.round(person.health_score ?? 80)}%.
+
+What is ${person.name} doing and feeling RIGHT NOW in response to this crisis?
+{"action":"specific thing they are doing this moment, 6-10 words","thought":"their raw inner thought, 10-15 words","event_title":"a vivid event headline for observers, 8-12 words","event_desc":"one powerful sentence about what they do in this crisis"}`,
+        }],
+      })
+
+      const raw = msg.content[0].type === 'text' ? msg.content[0].text.trim() : ''
+      let parsed: { action?: string; thought?: string; event_title?: string; event_desc?: string } = {}
+      try { parsed = JSON.parse(raw) } catch {
+        const m = raw.match(/\{[\s\S]*?\}/)
+        if (m) { try { parsed = JSON.parse(m[0]) } catch { /* ignore */ } }
+      }
+
+      if (!parsed.action) return
+
+      // Update person with AI-generated reaction
+      const newMemory = parsed.thought
+        ? { description: parsed.thought, day: worldDay, importance: 8 }
+        : null
+      const existingMems: Json[] = (meta.memories as Json[] ?? [])
+      const updatedMems: Json[] = newMemory
+        ? [...existingMems.slice(-19), newMemory as unknown as Json]
+        : existingMems
+
+      await db.from('persons').update({
+        current_action: parsed.action,
+        metadata: { ...meta, memories: updatedMems } as Json,
+      }).eq('id', person.id)
+
+      // Insert a personal reaction event
+      if (parsed.event_title) {
+        await db.from('public_events').insert({
+          world_id: worldId,
+          event_type: crisisType.toUpperCase(),
+          title: parsed.event_title,
+          description: parsed.event_desc ?? crisisDescription,
+          primary_person_id: person.id,
+          significance_score: 65,
+          is_milestone: false,
+          is_featured: true,
+          in_game_day: worldDay,
+          in_game_year: worldYear,
+          metadata: { source: 'consciousness_reaction', crisis: crisisType } as Json,
+        })
+      }
+    } catch (err) {
+      console.error(`[god/react] Failed for ${person.name}:`, err)
+    }
+  })
+
+  await Promise.allSettled(reactionPromises)
 }
 
 async function insertGodEvent(
