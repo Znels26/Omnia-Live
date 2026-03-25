@@ -5,6 +5,15 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import type { Database, Json } from "@/types/database";
 import { WorldState, SimBeing, SimClan, SimSettlement, SimEvent } from "./types";
 import { clamp, randomBetween } from "@/lib/utils";
+import {
+  progressSkillFromAction,
+  getPersonSkills,
+  getClanSkillAverages,
+  checkNewDiscoveries,
+  getClanEra,
+  getEraDescription,
+  TECHNOLOGIES,
+} from "./skills";
 
 // ---------------------------------------------------------------------------
 // Convenience row aliases from the generated Database type
@@ -229,8 +238,9 @@ interface PendingEvent {
   event_type: string;
   title: string;
   description: string;
-  primary_person_id: string | null;
-  settlement_id: string | null;
+  primary_person_id?: string | null;
+  settlement_id?: string | null;
+  culture_id?: string | null;
   significance_score: number;
   is_milestone: boolean;
   is_featured: boolean;
@@ -347,6 +357,13 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
     });
   }
 
+  // Progress skills from current action
+  const currentSkills = getPersonSkills(p.metadata)
+  const { skills: updatedSkills, changed: skillChanged } = progressSkillFromAction(currentSkills, p.current_action)
+  const updatedMetadata = skillChanged
+    ? { ...((p.metadata ?? {}) as Record<string, unknown>), skills: updatedSkills }
+    : p.metadata
+
   return {
     update: {
       need_hunger: hunger,
@@ -357,6 +374,7 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
       happiness_score: happiness,
       is_alive: isAlive,
       current_action: action,
+      ...(skillChanged ? { metadata: updatedMetadata as import('@/types/database').Json } : {}),
     },
     events,
   };
@@ -1065,11 +1083,13 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     const persons = (personsData ?? []) as DbPerson[];
 
     // Load settlements and cultures for event generation
-    const [settlementsRes] = await Promise.all([
+    const [settlementsRes, culturesRes] = await Promise.all([
       db.from("settlements").select("*").eq("world_id", world.id),
+      db.from("cultures").select("*").eq("world_id", world.id),
     ]);
 
     const settlements = (settlementsRes.data ?? []) as DbSettlement[];
+    const cultures = ((culturesRes.data ?? []) as DbCulture[]).map(dbCultureToSimClan);
 
     // Tick each person
     const allEvents: PendingEvent[] = [];
@@ -1110,6 +1130,16 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
       await maybeCreateVote(db, world.id, newDay, newYear, world.in_game_day);
     } catch (err) {
       console.error("[Engine] Vote creation failed:", err);
+    }
+
+    // Civilisation progression check — runs every 5 real ticks (~15s) to avoid overhead
+    if (world.in_game_day % 5 === 0) {
+      try {
+        const civEvents = await checkCivilizationProgress(db, world.id, persons, cultures, newDay, newYear);
+        allEvents.push(...civEvents);
+      } catch (err) {
+        console.error("[Engine] Civilisation check failed:", err);
+      }
     }
 
     // Build world config update (preserve existing config fields)
@@ -1176,4 +1206,101 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     console.error("[Engine] runSimulationTick failed:", error);
     return { success: false, eventsGenerated: 0, day: 0, year: 0 };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Civilisation Progression
+// ---------------------------------------------------------------------------
+
+async function checkCivilizationProgress(
+  db: ReturnType<typeof createAdminClient>,
+  worldId: string,
+  persons: DbPerson[],
+  cultures: SimClan[],
+  day: number,
+  year: number
+): Promise<PendingEvent[]> {
+  const events: PendingEvent[] = []
+
+  for (const clan of cultures) {
+    // Get all alive persons in this clan
+    const clanPersons = persons.filter(p => p.is_alive && p.culture_id === clan.id)
+    if (clanPersons.length === 0) continue
+
+    // Fetch current culture metadata for discovered tech list
+    const { data: cultureRow } = await db
+      .from('cultures')
+      .select('metadata')
+      .eq('id', clan.id)
+      .single()
+
+    const meta = (cultureRow?.metadata ?? {}) as Record<string, unknown>
+    const discovered: string[] = Array.isArray(meta.technologies) ? meta.technologies as string[] : []
+
+    // Compute average skills from all clan members' metadata
+    const clanMetadatas = clanPersons.map(p => p.metadata)
+    const avgSkills = getClanSkillAverages(clanMetadatas)
+
+    // Check for new discoveries
+    const newTechs = checkNewDiscoveries(avgSkills, clanPersons.length, discovered)
+
+    if (newTechs.length === 0) continue
+
+    // Apply discoveries
+    const allDiscovered = [...discovered, ...newTechs]
+    const newEra = getClanEra(allDiscovered)
+    const prevEra = getClanEra(discovered)
+
+    await db.from('cultures').update({
+      metadata: {
+        ...meta,
+        technologies: allDiscovered,
+        era: newEra,
+        knowledge_level: allDiscovered.length,
+      } as Json,
+    }).eq('id', clan.id)
+
+    // Create events for each discovery
+    for (const techId of newTechs) {
+      const tech = TECHNOLOGIES[techId]
+      if (!tech) continue
+
+      // Find a featured person from this clan to be the discoverer
+      const discoverer = clanPersons.find(p => p.is_featured) ?? clanPersons[0]
+
+      events.push({
+        world_id: worldId,
+        event_type: 'ERA_TRANSITION',
+        title: `${clan.name}: ${tech.eventTitle}`,
+        description: `${tech.eventDescription} ${discoverer ? `${discoverer.name} leads this breakthrough for the ${clan.name}.` : ''}`,
+        primary_person_id: discoverer?.id ?? null,
+        culture_id: clan.id,
+        significance_score: tech.significance,
+        is_milestone: tech.significance >= 85,
+        is_featured: tech.significance >= 85,
+        in_game_day: day,
+        in_game_year: year,
+        metadata: { technology: techId, era: newEra } as Json,
+      })
+    }
+
+    // Era transition event (if era changed)
+    if (newEra !== prevEra) {
+      events.push({
+        world_id: worldId,
+        event_type: 'ERA_TRANSITION',
+        title: `${clan.name} enters the ${newEra.replace('_', ' ').toLowerCase()}`,
+        description: `Through knowledge, labour, and discovery, the ${clan.name} have crossed into a new age. ${getEraDescription(newEra)}.`,
+        culture_id: clan.id,
+        significance_score: 98,
+        is_milestone: true,
+        is_featured: true,
+        in_game_day: day,
+        in_game_year: year,
+        metadata: { prev_era: prevEra, new_era: newEra } as Json,
+      })
+    }
+  }
+
+  return events
 }
