@@ -134,11 +134,12 @@ export default function WatchPage() {
   }
 
   return (
-    <div className="flex flex-col md:flex-row md:h-[calc(100vh-48px)] bg-fv-void md:overflow-hidden">
+    // h-dvh on mobile pins the whole page to the viewport — no scroll jumping when events arrive
+    <div className="flex flex-col h-dvh md:flex-row md:h-[calc(100vh-48px)] bg-fv-void overflow-hidden">
       {/* ── MAIN WORLD VIEWER ────────────────────────────────────────── */}
-      {/* Mobile: aspect-[16/10] creates height from width (no gap).
-          Desktop: flex-1 fills the row; aspect-auto removes the constraint. */}
-      <div className="relative aspect-[16/10] md:aspect-auto md:flex-1">
+      {/* Mobile: fixed 45% of viewport height so panel always fits below.
+          Desktop: flex-1 fills the row. */}
+      <div className="relative h-[45dvh] md:h-auto md:aspect-auto md:flex-1 flex-shrink-0">
         {/* Canvas fills container absolutely on both mobile and desktop */}
         <WorldViewer
           worldState={worldState}
@@ -192,7 +193,8 @@ export default function WatchPage() {
       </div>
 
       {/* ── RIGHT / BOTTOM PANEL ─────────────────────────────────────── */}
-      <div className="md:w-[340px] w-full flex flex-col border-t md:border-t-0 md:border-l border-fv-border bg-fv-surface md:overflow-hidden">
+      {/* flex-1 + min-h-0 lets this fill remaining dvh space on mobile without pushing the page */}
+      <div className="md:w-[340px] w-full flex flex-col flex-1 min-h-0 border-t md:border-t-0 md:border-l border-fv-border bg-fv-surface overflow-hidden">
         {/* World status header */}
         <div className="px-4 py-3 border-b border-fv-border flex items-center justify-between flex-shrink-0">
           <div>

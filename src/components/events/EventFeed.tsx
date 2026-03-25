@@ -22,13 +22,15 @@ export function EventFeed({
   className = "",
   autoScroll = true,
 }: EventFeedProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
   const prevEventsRef = useRef<SimEvent[]>([]);
 
   useEffect(() => {
     if (!autoScroll) return;
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Scroll the container itself — not scrollIntoView which hijacks page scroll on mobile
+    const el = containerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [events, autoScroll]);
 
   useEffect(() => {
@@ -59,6 +61,7 @@ export function EventFeed({
 
   return (
     <div
+      ref={containerRef}
       className={cn("overflow-y-auto space-y-0 scrollbar-thin", className)}
       style={{ maxHeight }}
     >
@@ -71,7 +74,6 @@ export function EventFeed({
           onClick={() => onEventClick?.(event)}
         />
       ))}
-      <div ref={bottomRef} />
     </div>
   );
 }
