@@ -34,6 +34,20 @@ interface Particle {
   color: string;
 }
 
+interface Bird {
+  x: number; y: number;
+  vx: number; vy: number;
+  phase: number; size: number;
+}
+
+interface CanvasNote {
+  id: string; text: string;
+  x: number; y: number;
+  offsetY: number;
+  opacity: number;
+  color: string;
+}
+
 const WORLD_WIDTH = 800;
 const WORLD_HEIGHT = 560;
 
@@ -53,6 +67,10 @@ export function WorldViewer({
   const [hoveredBeing, setHoveredBeing] = useState<SimBeing | null>(null);
   const [hoveredPos, setHoveredPos] = useState({ x: 0, y: 0 });
   const worldStateRef = useRef<WorldState | null>(null);
+  const birdsRef = useRef<Bird[]>([]);
+  const posCacheRef = useRef<Map<string, { cx: number; cy: number; tx: number; ty: number }>>(new Map());
+  const notesRef = useRef<CanvasNote[]>([]);
+  const knownEventIdsRef = useRef<Set<string>>(new Set());
 
   worldStateRef.current = worldState;
 
@@ -141,6 +159,9 @@ export function WorldViewer({
       ctx.fill();
     }
 
+    // ── Birds ─────────────────────────────────────────────────────
+    drawBirds(ctx, birdsRef.current, W, H, scaleX, scaleY, t, ambientLight);
+
     // ── Mountains (background) ───────────────────────────────────
     drawMountains(ctx, W, H, scaleX, scaleY, ambientLight);
 
@@ -158,6 +179,11 @@ export function WorldViewer({
       groundGrad.addColorStop(1, gEdge);
       ctx.fillStyle = groundGrad;
       ctx.fillRect(0, horizonY, W, H - horizonY);
+    }
+
+    // ── Clan Territories ─────────────────────────────────────────
+    if (state?.clans && state?.beings && state?.settlements) {
+      drawClanTerritories(ctx, state, scaleX, scaleY, ambientLight);
     }
 
     // ── Regions / Terrain ─────────────────────────────────────────
@@ -178,13 +204,35 @@ export function WorldViewer({
     // ── Beings ────────────────────────────────────────────────────
     if (state?.beings) {
       const alive = state.beings.filter((b) => b.status !== "DEAD");
+      const cache = posCacheRef.current;
+
+      // Lerp cached display positions toward current targets each frame
+      for (const being of alive) {
+        const pos = cache.get(being.id);
+        if (pos) {
+          pos.cx += (pos.tx - pos.cx) * 0.06;
+          pos.cy += (pos.ty - pos.cy) * 0.06;
+        }
+      }
+
       for (const being of alive) {
         const isSelected = being.id === selectedBeing;
         const isHovered = being.id === hoveredBeing?.id;
         const clan = state.clans.find((c) => c.id === being.clanId);
-        drawBeing(ctx, being, clan?.color ?? "#888", scaleX, scaleY, ambientLight, t, isSelected, isHovered);
+        const pos = cache.get(being.id);
+        const drawX = pos ? pos.cx : being.x;
+        const drawY = pos ? pos.cy : being.y;
+        drawBeing(ctx, being, clan?.color ?? "#888", scaleX, scaleY, ambientLight, t, isSelected, isHovered, drawX, drawY);
       }
     }
+
+    // ── Canvas Event Notifications ────────────────────────────────
+    notesRef.current = notesRef.current.filter(n => n.opacity > 0.02);
+    for (const note of notesRef.current) {
+      note.opacity = Math.max(0, note.opacity - 0.0025); // ~7 second fade
+      note.offsetY += 0.3; // float upward
+    }
+    drawCanvasNotes(ctx, notesRef.current, scaleX, scaleY);
 
     // ── Weather Effects ───────────────────────────────────────────
     const weather = state?.weather ?? { type: "clear", intensity: 0.3, temperature: 20, windSpeed: 0.2 };
@@ -242,6 +290,64 @@ export function WorldViewer({
 
     return () => resizeObserver.disconnect();
   }, []);
+
+  useEffect(() => {
+    birdsRef.current = Array.from({ length: 7 }, () => ({
+      x: Math.random() * WORLD_WIDTH,
+      y: 15 + Math.random() * 90,
+      vx: 0.25 + Math.random() * 0.35,
+      vy: (Math.random() - 0.5) * 0.04,
+      phase: Math.random() * Math.PI * 2,
+      size: 2.5 + Math.random() * 1.5,
+    }));
+  }, []);
+
+  useEffect(() => {
+    if (!worldState) return;
+    const cache = posCacheRef.current;
+    for (const being of worldState.beings) {
+      if (being.status === 'DEAD') continue;
+      const existing = cache.get(being.id);
+      if (existing) {
+        existing.tx = being.x;
+        existing.ty = being.y;
+      } else {
+        cache.set(being.id, { cx: being.x, cy: being.y, tx: being.x, ty: being.y });
+      }
+    }
+  }, [worldState]);
+
+  useEffect(() => {
+    const events = worldState?.recentEvents;
+    if (!events?.length) return;
+    const known = knownEventIdsRef.current;
+    const newEvents = events.filter(e => !known.has(e.id));
+    if (!newEvents.length) return;
+
+    for (const e of newEvents) known.add(e.id);
+
+    // Spawn canvas notifications for notable new events
+    const toSpawn = newEvents.filter(e => e.importance >= 35).slice(0, 2);
+    for (const e of toSpawn) {
+      const being = e.beingId ? worldState?.beings.find(b => b.id === e.beingId) : null;
+      const pos = being ? posCacheRef.current.get(being.id) : null;
+      const nx = pos ? pos.cx : being ? being.x : 300 + Math.random() * 200;
+      const ny = pos ? pos.cy : being ? being.y : 200 + Math.random() * 150;
+      notesRef.current.push({
+        id: e.id,
+        text: e.title.length > 32 ? e.title.slice(0, 32) + '…' : e.title,
+        x: nx,
+        y: ny,
+        offsetY: 0,
+        opacity: 1,
+        color: e.importance >= 70 ? '#c9a050' : 'rgba(200,195,185,0.9)',
+      });
+    }
+    // Cap at 4 simultaneous notifications
+    if (notesRef.current.length > 4) {
+      notesRef.current = notesRef.current.slice(-4);
+    }
+  }, [worldState?.recentEvents]);
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -734,10 +840,12 @@ function drawBeing(
   ambientLight: number,
   t: number,
   isSelected: boolean,
-  isHovered: boolean
+  isHovered: boolean,
+  drawX?: number,
+  drawY?: number
 ) {
-  const x = being.x * scaleX;
-  const y = being.y * scaleY;
+  const x = (drawX ?? being.x) * scaleX;
+  const y = (drawY ?? being.y) * scaleY;
   const seed = being.x * 0.37 + being.y * 0.19;
   const walkCycle = t * 2.5 + seed;
   const bobY = Math.sin(walkCycle) * 1.2 * scaleY;
@@ -983,6 +1091,95 @@ function lightenColor(hexColor: string, amount: number): string {
 
 function darkenColor(hexColor: string, amount: number): string {
   return adjustBrightness(hexColor, amount);
+}
+
+function drawBirds(
+  ctx: CanvasRenderingContext2D,
+  birds: Bird[],
+  W: number,
+  H: number,
+  scaleX: number,
+  scaleY: number,
+  t: number,
+  ambientLight: number
+) {
+  if (ambientLight < 0.25) return; // no birds at night
+  ctx.save();
+  ctx.strokeStyle = `rgba(25, 20, 15, ${0.25 + ambientLight * 0.35})`;
+  ctx.lineWidth = 1;
+  ctx.lineCap = 'round';
+  for (const bird of birds) {
+    bird.phase += 0.12;
+    bird.x += bird.vx;
+    bird.y += bird.vy + Math.sin(bird.phase) * 0.25;
+    if (bird.x > WORLD_WIDTH + 20) bird.x = -20;
+    bird.y = Math.max(12, Math.min(WORLD_HEIGHT * 0.38, bird.y));
+    const bx = bird.x * scaleX;
+    const by = bird.y * scaleY;
+    const wing = Math.sin(bird.phase) * bird.size * 0.45;
+    const s = bird.size * scaleX;
+    ctx.beginPath();
+    ctx.moveTo(bx - s, by + wing);
+    ctx.lineTo(bx, by);
+    ctx.lineTo(bx + s, by + wing);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawClanTerritories(
+  ctx: CanvasRenderingContext2D,
+  state: { clans: Array<{ id: string; color: string }>; beings: Array<{ id: string; clanId: string | null; x: number; y: number; status: string }>; settlements: Array<{ clanId: string | null; x: number; y: number }> },
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number
+) {
+  for (const clan of state.clans) {
+    const points: Array<{ x: number; y: number }> = [
+      ...state.beings
+        .filter(b => b.clanId === clan.id && b.status !== 'DEAD')
+        .map(b => ({ x: b.x * scaleX, y: b.y * scaleY })),
+      ...state.settlements
+        .filter(s => s.clanId === clan.id)
+        .map(s => ({ x: s.x * scaleX, y: s.y * scaleY })),
+    ];
+    if (points.length < 2) continue;
+    const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
+    const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+    const maxDist = Math.max(...points.map(p => Math.hypot(p.x - cx, p.y - cy)));
+    if (maxDist < 8) continue;
+    ctx.save();
+    ctx.globalAlpha = 0.055 + ambientLight * 0.03;
+    ctx.fillStyle = clan.color;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, maxDist * 1.3 + 18, maxDist * 0.85 + 12, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawCanvasNotes(
+  ctx: CanvasRenderingContext2D,
+  notes: CanvasNote[],
+  scaleX: number,
+  scaleY: number
+) {
+  for (const note of notes) {
+    if (note.opacity <= 0.02) continue;
+    const x = note.x * scaleX;
+    const y = (note.y - note.offsetY) * scaleY;
+    ctx.save();
+    ctx.globalAlpha = note.opacity;
+    ctx.font = `bold ${Math.max(8, 9 * scaleX)}px var(--font-display, Georgia, serif)`;
+    ctx.textAlign = 'center';
+    const tw = ctx.measureText(note.text).width;
+    ctx.fillStyle = 'rgba(4, 4, 12, 0.75)';
+    rrect(ctx, x - tw / 2 - 5, y - 12, tw + 10, 15, 4);
+    ctx.fill();
+    ctx.fillStyle = note.color;
+    ctx.fillText(note.text, x, y);
+    ctx.restore();
+  }
 }
 
 /** Browser-safe rounded rectangle — avoids ctx.roundRect which is Chrome 99+ */

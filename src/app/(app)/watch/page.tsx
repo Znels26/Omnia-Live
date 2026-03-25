@@ -10,6 +10,16 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
+type DirectorArc = {
+  arc_title: string;
+  arc_description: string;
+  tension: number;
+  focus_character: string | null;
+  focus_reason: string;
+  omen: string;
+  day: number;
+} | null;
+
 export default function WatchPage() {
   const [worldState, setWorldState] = useState<WorldState | null>(null);
   const [selectedBeing, setSelectedBeing] = useState<string | null>(null);
@@ -18,21 +28,31 @@ export default function WatchPage() {
   const [loading, setLoading] = useState(true);
   const [since, setSince] = useState<string | null>(null);
   const [tickStatus, setTickStatus] = useState<"ok" | "err" | "idle">("idle");
+  const [directorArc, setDirectorArc] = useState<DirectorArc>(null);
   const pollRef = useRef<NodeJS.Timeout | null>(null);
   const tickRef = useRef<NodeJS.Timeout | null>(null);
   const clockRef = useRef<NodeJS.Timeout | null>(null);
+  const aiTickRef = useRef<NodeJS.Timeout | null>(null);
+  const directorRef = useRef<NodeJS.Timeout | null>(null);
   const worldRef = useRef<WorldState | null>(null);
-  // Client-side world clock (advances smoothly, not reset by server syncs)
   const clientTimeRef = useRef<number>(8);
 
   useEffect(() => {
     loadWorldState();
 
-    // Tick the simulation every 3 seconds
+    // Core simulation tick every 3 seconds
     tickRef.current = setInterval(runTick, 3000);
 
-    // Sync fresh positions + events from DB every 8 seconds
+    // Sync fresh state from DB every 8 seconds
     pollRef.current = setInterval(loadWorldState, 8000);
+
+    // AI character decisions every 30 seconds
+    aiTickRef.current = setInterval(runAITick, 30000);
+
+    // Story director every 5 minutes
+    directorRef.current = setInterval(runDirector, 5 * 60 * 1000);
+    // Run director on load after a short delay
+    setTimeout(runDirector, 4000);
 
     // Smooth client clock: 1 sim day = 12 real hours
     // Rate: 24 / (12h * 3600s/h / 0.2s per tick) = 24/216000 = 1/9000 world-hours per tick
@@ -63,6 +83,8 @@ export default function WatchPage() {
       if (pollRef.current) clearInterval(pollRef.current);
       if (tickRef.current) clearInterval(tickRef.current);
       if (clockRef.current) clearInterval(clockRef.current);
+      if (aiTickRef.current) clearInterval(aiTickRef.current);
+      if (directorRef.current) clearInterval(directorRef.current);
     };
   }, []);
 
@@ -91,12 +113,34 @@ export default function WatchPage() {
     }
   }
 
+  async function runAITick() {
+    try {
+      await fetch("/api/world/ai-tick", { method: "POST" });
+    } catch {
+      // Silent — AI tick is best-effort
+    }
+  }
+
+  async function runDirector() {
+    try {
+      const res = await fetch("/api/world/director", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.arc) setDirectorArc(data.arc);
+      }
+    } catch {
+      // Silent
+    }
+  }
+
   async function loadWorldState() {
     try {
       const res = await fetch("/api/world", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
       const serverWorld: WorldState = data.world;
+      // Capture director arc from server if available and we don't have one yet
+      if (data.directorArc && !directorArc) setDirectorArc(data.directorArc);
       // On very first load, seed client clock from server
       if (!worldRef.current) {
         clientTimeRef.current = serverWorld.worldTime;
@@ -118,8 +162,13 @@ export default function WatchPage() {
 
   const selectedBeingData = worldState?.beings.find((b) => b.id === selectedBeing);
   const selectedClanData = worldState?.clans.find((c) => c.id === selectedClan);
-  const storyArc = worldState ? getCurrentStoryArc(worldState) : null;
-  const focus = worldState ? selectDirectorFocus(worldState) : null;
+  const proceduralArc = worldState ? getCurrentStoryArc(worldState) : null;
+  // Prefer AI director arc; fall back to procedural
+  const displayArc = directorArc
+    ? { title: directorArc.arc_title, description: directorArc.arc_description, tension: directorArc.tension }
+    : proceduralArc
+      ? { title: proceduralArc.title, description: proceduralArc.description, tension: proceduralArc.tension }
+      : null;
 
   if (loading) {
     return (
@@ -161,28 +210,33 @@ export default function WatchPage() {
         )}
 
         {/* ── Bottom Story Arc Bar (desktop only) ── */}
-        {storyArc && (
+        {displayArc && (
           <div className="hidden md:block absolute bottom-0 left-0 right-0 bg-gradient-to-t from-fv-void to-transparent p-4 pt-12">
             <div
               className="overlay-panel p-4 flex items-start gap-4"
               style={{
-                borderColor: storyArc.tension > 70 ? "rgba(201,113,74,0.4)" : "rgba(37,37,56,1)",
+                borderColor: displayArc.tension > 70 ? "rgba(201,113,74,0.4)" : "rgba(37,37,56,1)",
               }}
             >
-              <div className="flex-1">
+              <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
-                  <div className="w-2 h-2 rounded-full bg-fv-ember animate-pulse" />
+                  <div className="w-2 h-2 rounded-full bg-fv-ember animate-pulse flex-shrink-0" />
                   <span className="text-xs text-fv-ember font-display uppercase tracking-wider">
-                    Current Story Arc
+                    {directorArc ? "AI Director" : "Story Arc"}
                   </span>
-                  <div className="ml-auto">
-                    <TensionBar tension={storyArc.tension} />
+                  <div className="ml-auto flex-shrink-0">
+                    <TensionBar tension={displayArc.tension} />
                   </div>
                 </div>
-                <div className="font-display text-fv-moon font-medium">{storyArc.title}</div>
+                <div className="font-display text-fv-moon font-medium">{displayArc.title}</div>
                 <p className="text-xs text-fv-text-muted mt-0.5 line-clamp-1">
-                  {storyArc.description}
+                  {displayArc.description}
                 </p>
+                {directorArc?.omen && (
+                  <p className="text-xs text-fv-text-dim italic mt-1 line-clamp-1">
+                    {directorArc.omen}
+                  </p>
+                )}
               </div>
               <Button variant="token" size="sm" className="flex-shrink-0">
                 Vote ⚡

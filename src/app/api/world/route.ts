@@ -230,5 +230,16 @@ export async function GET() {
     year: world.in_game_year ?? 1,
   }
 
-  return NextResponse.json({ world: worldState, events })
+  // Expose AI director arc if available
+  const directorArc = (config.director_arc ?? null) as {
+    arc_title: string;
+    arc_description: string;
+    tension: number;
+    focus_character: string | null;
+    focus_reason: string;
+    omen: string;
+    day: number;
+  } | null
+
+  return NextResponse.json({ world: worldState, events, directorArc })
 }
