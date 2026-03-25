@@ -165,9 +165,28 @@ export function WorldViewer({
     // ── Mountains (background) ───────────────────────────────────
     drawMountains(ctx, W, H, scaleX, scaleY, ambientLight);
 
-    // ── Ground plane — covers the lower 55% with a grass gradient ──
+    // ── Dawn / Dusk horizon glow ──────────────────────────────────
+    const horizonY = H * 0.42;
     {
-      const horizonY = H * 0.42;
+      const isDawn = worldTime >= 5 && worldTime < 12;
+      const isDusk = worldTime >= 17 && worldTime < 21;
+      if (isDawn || isDusk) {
+        const center = isDawn ? 6 : 18.5;
+        const gi = Math.max(0, 1 - Math.abs(worldTime - center) / 1.5);
+        if (gi > 0.01) {
+          const hg = ctx.createLinearGradient(0, horizonY - H * 0.12, 0, horizonY + H * 0.15);
+          hg.addColorStop(0, `rgba(255,130,30,0)`);
+          hg.addColorStop(0.35, `rgba(255,80,10,${0.45 * gi})`);
+          hg.addColorStop(0.65, `rgba(200,50,0,${0.28 * gi})`);
+          hg.addColorStop(1, `rgba(120,30,0,0)`);
+          ctx.fillStyle = hg;
+          ctx.fillRect(0, horizonY - H * 0.12, W, H * 0.27);
+        }
+      }
+    }
+
+    // ── Ground plane ──────────────────────────────────────────────
+    {
       const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
       const gBase = ambientLight > 0.5
         ? `rgba(38,58,28,${0.5 + ambientLight * 0.3})`
@@ -181,9 +200,47 @@ export function WorldViewer({
       ctx.fillRect(0, horizonY, W, H - horizonY);
     }
 
+    // ── Perspective depth grid (isometric illusion) ───────────────
+    {
+      ctx.save();
+      const vpX = W * 0.48;
+      // Horizontal receding lines — quadratic spacing gives depth
+      for (let i = 1; i <= 9; i++) {
+        const p = Math.pow(i / 10, 1.7);
+        const gy = horizonY + p * (H - horizonY);
+        ctx.globalAlpha = (0.02 + 0.05 * p) * (0.4 + 0.6 * ambientLight);
+        ctx.strokeStyle = 'rgba(90, 140, 50, 1)';
+        ctx.lineWidth = 0.7 * scaleY;
+        ctx.beginPath();
+        ctx.moveTo(0, gy);
+        ctx.lineTo(W, gy);
+        ctx.stroke();
+      }
+      // Converging radial lines toward vanishing point
+      for (let i = -9; i <= 9; i++) {
+        if (i === 0) continue;
+        const bx = W * 0.5 + i * W * 0.115;
+        const fade = Math.max(0, 1 - Math.abs(i) * 0.085);
+        ctx.globalAlpha = 0.022 * fade * (0.4 + 0.6 * ambientLight);
+        ctx.strokeStyle = 'rgba(90, 140, 50, 1)';
+        ctx.lineWidth = 0.6 * scaleX;
+        ctx.beginPath();
+        ctx.moveTo(vpX, horizonY);
+        ctx.lineTo(bx, H);
+        ctx.stroke();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
     // ── Clan Territories ─────────────────────────────────────────
     if (state?.clans && state?.beings && state?.settlements) {
       drawClanTerritories(ctx, state, scaleX, scaleY, ambientLight);
+    }
+
+    // ── Settlement paths / trade routes ───────────────────────────
+    if (state?.settlements && state.settlements.length > 1) {
+      drawPaths(ctx, state.settlements, scaleX, scaleY, ambientLight);
     }
 
     // ── Regions / Terrain ─────────────────────────────────────────
@@ -818,16 +875,30 @@ function drawSettlement(
     }
   }
 
-  // Central fire for camps at night
-  if (settlement.type === "CAMP" && ambientLight < 0.6) {
-    const flicker = Math.sin(t * 9 + settlement.x) * 0.3 + 0.7;
-    ctx.fillStyle = `rgba(255, 140, 30, ${0.8 * flicker})`;
+  // Night fire / torch glow for all settlements
+  if (ambientLight < 0.65) {
+    const nightDepth = Math.max(0, 0.65 - ambientLight);
+    const flicker = Math.sin(t * 8 + settlement.x * 0.4) * 0.28 + 0.72;
+    const fireY = settlement.type === "CAMP" ? y + size * 0.15 : y + size * 0.05;
+
+    // Outer warm halo
+    const haloR = size * (settlement.type === "CAMP" ? 5 : 3.5);
+    const halo = ctx.createRadialGradient(x, fireY, 0, x, fireY, haloR);
+    halo.addColorStop(0, `rgba(255,140,30,${0.35 * nightDepth * flicker})`);
+    halo.addColorStop(1, 'rgba(200,70,10,0)');
+    ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(x, y + size * 0.15, 3.5 * s, 0, Math.PI * 2);
+    ctx.arc(x, fireY, haloR, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = `rgba(255, 220, 80, ${0.9 * flicker})`;
+
+    // Flame core
+    ctx.fillStyle = `rgba(255, 120, 20, ${0.75 * nightDepth * flicker})`;
     ctx.beginPath();
-    ctx.arc(x, y + size * 0.1, 1.8 * s, 0, Math.PI * 2);
+    ctx.arc(x, fireY, 3 * s, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = `rgba(255, 230, 90, ${0.9 * nightDepth * flicker})`;
+    ctx.beginPath();
+    ctx.arc(x, fireY - 1.5 * s, 1.5 * s, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -858,16 +929,21 @@ function drawBeing(
   drawX?: number,
   drawY?: number
 ) {
+  const worldDrawY = drawY ?? being.y;
   const x = (drawX ?? being.x) * scaleX;
-  const y = (drawY ?? being.y) * scaleY;
+  const y = worldDrawY * scaleY;
   const seed = being.x * 0.37 + being.y * 0.19;
   const walkCycle = t * 2.5 + seed;
   const bobY = Math.sin(walkCycle) * 1.2 * scaleY;
   const legSwing = Math.sin(walkCycle) * 0.35;
   const armSwing = Math.sin(walkCycle + Math.PI) * 0.3;
 
-  // Scale for core vs regular
-  const s = (being.isCore ? 1.5 : 1.0) * Math.min(scaleX, scaleY);
+  // Depth-based scale: beings near horizon (y≈0.42H) appear small,
+  // beings in foreground (y≈H) appear large — isometric perspective
+  const depthFactor = Math.max(0.45, Math.min(1.55,
+    0.5 + (worldDrawY - WORLD_HEIGHT * 0.40) / (WORLD_HEIGHT * 0.55)
+  ));
+  const s = (being.isCore ? 1.45 : 1.0) * Math.min(scaleX, scaleY) * depthFactor;
 
   // Head radius, body measurements
   const headR = 4 * s;
@@ -1139,6 +1215,45 @@ function drawBirds(
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function drawPaths(
+  ctx: CanvasRenderingContext2D,
+  settlements: Array<{ x: number; y: number; clanId: string | null }>,
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number
+) {
+  const s = Math.min(scaleX, scaleY);
+  for (let i = 0; i < settlements.length; i++) {
+    for (let j = i + 1; j < settlements.length; j++) {
+      const a = settlements[i];
+      const b = settlements[j];
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist > 240) continue;
+
+      // Deterministic mid-point curve (no jitter — seed from positions)
+      const seed = ((a.x * 7 + b.y * 13) % 40) - 20;
+      const mx = ((a.x + b.x) / 2 + seed) * scaleX;
+      const my = ((a.y + b.y) / 2 + seed * 0.4) * scaleY;
+
+      ctx.save();
+      ctx.globalAlpha = 0.11 + 0.07 * ambientLight;
+      ctx.strokeStyle = '#7a5a2a';
+      ctx.lineWidth = 2.2 * s;
+      ctx.setLineDash([5 * scaleX, 8 * scaleX]);
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(a.x * scaleX, a.y * scaleY);
+      ctx.quadraticCurveTo(mx, my, b.x * scaleX, b.y * scaleY);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+  ctx.globalAlpha = 1;
+  ctx.setLineDash([]);
 }
 
 function drawClanTerritories(

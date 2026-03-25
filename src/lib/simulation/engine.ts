@@ -1068,9 +1068,16 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
       return { success: true, eventsGenerated: 0, day: world.in_game_day, year: world.in_game_year };
     }
 
-    // Advance day counter
-    const newDay = world.in_game_day + 1;
-    const newYear = newDay > 0 && newDay % 365 === 0 ? world.in_game_year + 1 : world.in_game_year;
+    // Compute new world-time first — it drives the day/year rollover.
+    // 1 sim day = 12 real hours = 14 400 ticks at 3 s/tick → +1/600 world-hours per tick.
+    const existingConfig = (world.config ?? {}) as Record<string, unknown>;
+    const prevWorldTime = (existingConfig.world_time as number) ?? 8;
+    const newWorldTime = (prevWorldTime + 1 / 600) % 24;
+
+    // Day only advances when the clock wraps past midnight (keeps day & time in sync)
+    const dayIncrement = newWorldTime < prevWorldTime ? 1 : 0;
+    const newDay = world.in_game_day + dayIncrement;
+    const newYear = dayIncrement > 0 && newDay % 365 === 0 ? world.in_game_year + 1 : world.in_game_year;
 
     // Load living persons
     const { data: personsData } = await db
@@ -1143,11 +1150,9 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     }
 
     // Build world config update (preserve existing config fields)
-    const existingConfig = (world.config ?? {}) as Record<string, unknown>;
     const newConfig: Json = {
       ...existingConfig,
-      // 1 sim day = 12 real hours; ticks fire every 3s → 14400 ticks/day → 24/14400 = 1/600 hours per tick
-      world_time: ((existingConfig.world_time as number ?? 8) + 1 / 600) % 24,
+      world_time: newWorldTime, // already computed above from prevWorldTime
     };
 
     // Persist all changes
