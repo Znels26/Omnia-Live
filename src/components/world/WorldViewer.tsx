@@ -761,7 +761,7 @@ export function WorldViewer({
         const by = pos ? pos.cy : b.y;
         const dx = bx - canvasX;
         const dy = by - canvasY;
-        return Math.sqrt(dx * dx + dy * dy) < 18 / cam.zoom;
+        return Math.sqrt(dx * dx + dy * dy) < 28 / cam.zoom;
       });
 
       setHoveredBeing(found ?? null);
@@ -794,7 +794,7 @@ export function WorldViewer({
         const by = pos ? pos.cy : b.y;
         const dx = bx - canvasX;
         const dy = by - canvasY;
-        return Math.sqrt(dx * dx + dy * dy) < 18 / cam.zoom;
+        return Math.sqrt(dx * dx + dy * dy) < 28 / cam.zoom;
       });
 
       if (found) {

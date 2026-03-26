@@ -421,6 +421,7 @@ function BeingsPanel({
   selected: SimBeing | null;
   onSelect: (id: string | null) => void;
 }) {
+  const [inspiring, setInspiring] = useState(false);
   const alive = beings.filter((b) => b.status !== "DEAD");
   const core = alive.filter((b) => b.isCore);
   const background = alive.filter((b) => !b.isCore).slice(0, 20);
@@ -541,8 +542,35 @@ function BeingsPanel({
           )}
 
           <div className="flex gap-2 mt-3">
-            <Button variant="outline" size="sm" className="flex-1">Follow</Button>
-            <Button variant="token" size="sm" className="flex-1">Inspire ⚡</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="flex-1"
+              onClick={() => onSelect(selected.id)}
+              title="Camera will follow this character"
+            >
+              👁 Following
+            </Button>
+            <Button
+              variant="token"
+              size="sm"
+              className="flex-1"
+              loading={inspiring}
+              onClick={async () => {
+                if (!selected || inspiring) return;
+                setInspiring(true);
+                try {
+                  await fetch("/api/world/inspire", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ personId: selected.id }),
+                  });
+                } catch { /* silent */ }
+                setInspiring(false);
+              }}
+            >
+              Inspire ⚡
+            </Button>
           </div>
         </div>
       )}

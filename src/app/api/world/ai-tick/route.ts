@@ -11,6 +11,32 @@ import {
 
 const anthropic = new Anthropic()
 
+// World-space zones matching the terrain in tick/route.ts
+const ZONES = {
+  forest:  { x: 200, y: 370 },
+  river:   { x: 420, y: 310 },
+  coast:   { x: 510, y: 480 },
+  plains:  { x: 620, y: 330 },
+  valley:  { x: 400, y: 370 },
+  heights: { x: 360, y: 220 },
+  market:  { x: 450, y: 400 },
+}
+
+// Parse action text to infer which zone this person is heading to
+function inferZoneFromAction(action: string): { x: number; y: number } | null {
+  const a = action.toLowerCase()
+  if (/hunt|stalk|track|snare|prey|deer|boar|arrow|bow/.test(a)) return ZONES.forest
+  if (/forest|tree|wood|timber|grove|undergrowth|brush/.test(a)) return ZONES.forest
+  if (/fish|river|stream|current|net|wade|shore|water|catch/.test(a)) return ZONES.river
+  if (/coast|sea|tide|wave|beach|salt|ocean/.test(a)) return ZONES.coast
+  if (/field|farm|crop|harvest|grain|soil|plant|sow|furrow|hoe|reap/.test(a)) return ZONES.plains
+  if (/flock|shepherd|herd|pasture|graze|sheep|cattle|animal/.test(a)) return ZONES.plains
+  if (/mountain|height|ridge|peak|cliff|stone|high ground|hilltop|watch/.test(a)) return ZONES.heights
+  if (/market|trade|barter|goods|merchant|price|value/.test(a)) return ZONES.market
+  if (/pray|ritual|spirit|sacred|altar|shrine|ceremony/.test(a)) return ZONES.heights
+  return null // at settlement/camp
+}
+
 export async function POST() {
   try {
     const db = createAdminClient()
@@ -156,27 +182,37 @@ async function decideForPerson(
     ? `\n⚠️ ACTIVE CRISIS — this MUST shape ${person.name}'s response:\n${activeCrisis}\n`
     : ''
 
+  const locationHint = (() => {
+    const px = Number(person.pos_x), py = Number(person.pos_y)
+    if (px < 300 && py > 320) return 'in the forest'
+    if (px > 380 && px < 480 && py < 340) return 'by the river'
+    if (px > 580 && py > 290 && py < 390) return 'on the plains'
+    if (py < 260) return 'in the high ground'
+    if (px > 460 && py > 440) return 'near the coast'
+    return 'at the settlement'
+  })()
+
   const userPrompt = `Character: ${person.name}, age ${person.age}, ${person.occupation || 'villager'} of the ${(culture?.name as string) ?? 'valley'}.
 Era: ${era}. Season: ${season ?? 'spring'}.
-Day ${world.in_game_day}, Year ${world.in_game_year}.
+Day ${world.in_game_day}, Year ${world.in_game_year}. Currently ${locationHint}.
 Personality: ${traits}. State: ${pressing}. Health ${person.health_score}%. Happiness ${person.happiness_score}%.
 Skills: ${skillSummary}.
 ${person.current_goal ? `Ongoing goal: "${person.current_goal}"` : ''}
 ${crisisBlock}
 ${personalEvents.length ? `Recent personal events:\n${personalEvents.map(e => `- ${e.title} (day ${e.in_game_day})`).join('\n')}` : ''}
 ${worldEvents.length ? `\nWorld events:\n${worldEvents.map(e => `- ${e.title}`).join('\n')}` : ''}
-${memories.length ? `\nMemories:\n${memories.map(m => `- ${m.description} (day ${m.day})`).join('\n')}` : ''}
+${memories.length ? `\nMemories (last 5):\n${memories.slice(-5).map(m => `- ${m.description}`).join('\n')}` : ''}
 
-What is ${person.name} doing and thinking RIGHT NOW?${activeCrisis ? ` They MUST be actively responding to the crisis — not ignoring it.` : ''} Be specific to their skills, personality, and era. Reply ONLY with valid JSON:
-{"action":"present-tense activity 5-8 words","goal":"what they want most right now 8-12 words","thought":"a vivid inner thought reflecting their life 10-15 words"}`
+What is ${person.name} doing RIGHT NOW?${activeCrisis ? ` They MUST be actively responding to the crisis.` : ''} Reply ONLY with valid JSON (no markdown):
+{"action":"present-tense, location-specific activity 5-8 words","goal":"immediate want 8-12 words","thought":"vivid inner thought 10-15 words","health_delta":-2 to 2,"happiness_delta":-3 to 3}`
 
-  let parsed: { action?: string; goal?: string; thought?: string } = {}
+  let parsed: { action?: string; goal?: string; thought?: string; health_delta?: number; happiness_delta?: number } = {}
 
   try {
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 160,
-      system: `You are a character simulator for First Valley, a living civilisation watched by real players. Characters exist in ${era}. Generate authentic, era-appropriate thoughts and actions. A Stone Age character thinks about fire and flint, not books or markets. A Bronze Age character knows metal. Be vivid and specific. No modern language.`,
+      max_tokens: 180,
+      system: `You are a character simulator for First Valley, a living civilisation watched by real players. Characters exist in ${era}. Generate authentic, era-appropriate thoughts and actions. Be vivid and specific to where they physically ARE (${locationHint}). Use location details — if in forest, mention trees/animals; if by river, mention water/current. No modern language. health_delta should reflect physical risk of the action (hunting = negative, resting = positive). happiness_delta should reflect emotional context.`,
       messages: [{ role: 'user', content: userPrompt }],
     })
 
@@ -192,6 +228,32 @@ What is ${person.name} doing and thinking RIGHT NOW?${activeCrisis ? ` They MUST
 
   if (!parsed.action) return
 
+  // Move person toward the zone implied by their action
+  const targetZone = inferZoneFromAction(parsed.action)
+  const posUpdate: Record<string, number> = {}
+  if (targetZone) {
+    // Snap 40% toward zone + jitter — movement tick lerps them the rest of the way
+    const jx = (Math.random() - 0.5) * 100
+    const jy = (Math.random() - 0.5) * 80
+    const curX = Number(person.pos_x)
+    const curY = Number(person.pos_y)
+    posUpdate.pos_x = Math.round(Math.max(30, Math.min(770, curX + (targetZone.x + jx - curX) * 0.4)))
+    posUpdate.pos_y = Math.round(Math.max(50, Math.min(510, curY + (targetZone.y + jy - curY) * 0.4)))
+  }
+
+  // Stat changes: clamp health 1-10, happiness 1-10
+  const statUpdate: Record<string, number> = {}
+  const healthDelta = Math.max(-2, Math.min(2, Number(parsed.health_delta ?? 0)))
+  const happinessDelta = Math.max(-3, Math.min(3, Number(parsed.happiness_delta ?? 0)))
+  if (healthDelta !== 0) {
+    const curHealth = Number(person.health_score) ?? 7
+    statUpdate.health_score = Math.max(1, Math.min(10, curHealth + healthDelta))
+  }
+  if (happinessDelta !== 0) {
+    const curHappiness = Number(person.happiness_score) ?? 6
+    statUpdate.happiness_score = Math.max(1, Math.min(10, curHappiness + happinessDelta))
+  }
+
   const newMemory = parsed.thought
     ? { description: parsed.thought, day: world.in_game_day, importance: 5 }
     : null
@@ -202,6 +264,8 @@ What is ${person.name} doing and thinking RIGHT NOW?${activeCrisis ? ` They MUST
   await db.from('persons').update({
     current_action: parsed.action as string,
     ...(parsed.goal ? { current_goal: parsed.goal as string } : {}),
+    ...posUpdate,
+    ...statUpdate,
     metadata: { ...meta, memories: updatedMems } as Json,
   }).eq('id', person.id as string)
 }
@@ -330,15 +394,26 @@ What happens in this brief encounter? Reply ONLY with valid JSON:
 
   const significance = parsed.significance ?? 25
 
+  // Map outcome to event type for richer categories in the feed
+  const eventType = (() => {
+    switch (parsed.outcome) {
+      case 'conflict': return 'BATTLE'
+      case 'romance': return 'MARRIAGE'
+      case 'teaching': return 'DISCOVERY'
+      case 'trade': return 'TRADE_ROUTE'
+      default: return 'SOCIAL'
+    }
+  })()
+
   // Create a public event for this interaction
   await db.from('public_events').insert({
     world_id: world.id,
-    event_type: 'SOCIAL',
+    event_type: eventType,
     title: `${personA.name} and ${personB.name}: ${parsed.interaction_type ?? 'an encounter'}`,
     description: `${parsed.what_happens}${parsed.a_says ? ` "${parsed.a_says}"` : ''}${parsed.b_says ? ` "${parsed.b_says}"` : ''}`,
     primary_person_id: personA.id as string,
     significance_score: significance,
-    is_milestone: false,
+    is_milestone: significance >= 60,
     is_featured: significance >= 50,
     in_game_day: world.in_game_day,
     in_game_year: world.in_game_year,
@@ -348,6 +423,33 @@ What happens in this brief encounter? Reply ONLY with valid JSON:
       skill_transfer: parsed.skill_transfer,
     } as Json,
   })
+
+  // Apply REAL consequences: conflict injures, romance lifts spirits, teaching uplifts
+  const consequenceUpdates: PromiseLike<unknown>[] = []
+  if (parsed.outcome === 'conflict') {
+    // Actual injury — reduce health of both
+    const injuryA = Math.random() < 0.5 ? 1 : 0
+    const injuryB = Math.random() < 0.4 ? 1 : 0
+    if (injuryA) {
+      const h = Math.max(1, (Number(personA.health_score) ?? 7) - injuryA)
+      consequenceUpdates.push(db.from('persons').update({ health_score: h }).eq('id', personA.id as string))
+    }
+    if (injuryB) {
+      const h = Math.max(1, (Number(personB.health_score) ?? 7) - injuryB)
+      consequenceUpdates.push(db.from('persons').update({ health_score: h }).eq('id', personB.id as string))
+    }
+    // Reduce happiness for both
+    consequenceUpdates.push(
+      db.from('persons').update({ happiness_score: Math.max(1, (Number(personA.happiness_score) ?? 6) - 2) }).eq('id', personA.id as string),
+      db.from('persons').update({ happiness_score: Math.max(1, (Number(personB.happiness_score) ?? 6) - 1) }).eq('id', personB.id as string),
+    )
+  } else if (parsed.outcome === 'romance' || parsed.outcome === 'friendship') {
+    // Lift spirits
+    consequenceUpdates.push(
+      db.from('persons').update({ happiness_score: Math.min(10, (Number(personA.happiness_score) ?? 6) + 2) }).eq('id', personA.id as string),
+      db.from('persons').update({ happiness_score: Math.min(10, (Number(personB.happiness_score) ?? 6) + 2) }).eq('id', personB.id as string),
+    )
+  }
 
   // Add memories to both characters
   const memA = parsed.a_says
@@ -424,5 +526,5 @@ What happens in this brief encounter? Reply ONLY with valid JSON:
     )
   }
 
-  await Promise.allSettled(updatePromises)
+  await Promise.allSettled([...updatePromises, ...consequenceUpdates])
 }
