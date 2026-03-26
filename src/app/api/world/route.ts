@@ -237,7 +237,7 @@ export async function GET() {
     .select('*')
     .eq('world_id', world.id)
     .order('created_at', { ascending: false })
-    .limit(50)
+    .limit(35)
 
   function mapEventCategory(type: string): SimEvent['category'] {
     switch (type) {

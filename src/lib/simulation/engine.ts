@@ -370,6 +370,10 @@ function generateNotableMoment(
 
   const pick = usePool[Math.floor(Math.random() * usePool.length)];
 
+  // Score significance from the magnitude of stat impact — avoids flat 55 for everything
+  const impactMagnitude = Math.abs(pick[2]) + Math.abs(pick[3]);
+  const significance = impactMagnitude >= 4 ? 55 : impactMagnitude >= 2 ? 35 : 20;
+
   return {
     event: {
       world_id: p.world_id,
@@ -378,9 +382,9 @@ function generateNotableMoment(
       description: pick[1],
       primary_person_id: p.id,
       settlement_id: p.residence_id,
-      significance_score: 55,
+      significance_score: significance,
       is_milestone: false,
-      is_featured: true,
+      is_featured: false,
       in_game_day: day,
       in_game_year: year,
       metadata: { occupation: p.occupation, action: p.current_action },
@@ -495,8 +499,8 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
 
   const metaPatch: Record<string, unknown> = {};
 
-  // Notable moments fire for ALL persons (not just featured) but at lower rate
-  const momentChance = p.is_featured ? 0.04 : 0.012;
+  // Notable moments — featured chars get ~1 per 3 minutes, non-featured ~1 per 10 minutes
+  const momentChance = p.is_featured ? 0.005 : 0.0015;
   if (roll < momentChance) {
     const notableResult = generateNotableMoment(p, day, year, recentEventTitles);
     if (notableResult) {

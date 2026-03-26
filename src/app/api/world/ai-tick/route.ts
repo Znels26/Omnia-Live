@@ -300,10 +300,10 @@ async function runInteractions(
 
   if (pairs.length === 0) return 0
 
-  // Run interactions for a subset (max 4, 60% chance each)
+  // Run interactions for a subset (max 1 per tick, 35% chance each)
   const selected = pairs
-    .filter(() => Math.random() < 0.6)
-    .slice(0, 4)
+    .filter(() => Math.random() < 0.35)
+    .slice(0, 1)
 
   const results = await Promise.allSettled(
     selected.map(([a, b]) => interactPair(a, b, cultures, eraMap, recentEvents, world, db, activeCrisis))
@@ -391,8 +391,10 @@ What happens in this brief encounter? Reply ONLY with valid JSON:
   }
 
   if (!parsed.what_happens) return
+  // Don't log trivial non-events to the public feed
+  if (parsed.interaction_type === 'nothing' || parsed.outcome === 'neutral') return
 
-  const significance = parsed.significance ?? 25
+  const significance = Math.min(60, Math.max(15, parsed.significance ?? 25))
 
   // Map outcome to event type for richer categories in the feed
   const eventType = (() => {
@@ -405,16 +407,30 @@ What happens in this brief encounter? Reply ONLY with valid JSON:
     }
   })()
 
+  // Build a vivid title from the interaction type and outcome
+  const interactionVerbs: Record<string, string> = {
+    teaching: `${personA.name} teaches ${personB.name}`,
+    argument: `${personA.name} and ${personB.name} argue`,
+    trade: `${personA.name} and ${personB.name} trade`,
+    bonding: `${personA.name} and ${personB.name} share a moment`,
+    rivalry: `${personA.name} and ${personB.name} clash`,
+    romance: `${personA.name} and ${personB.name} grow closer`,
+    warning: `${personA.name} warns ${personB.name}`,
+    storytelling: `${personA.name} tells ${personB.name} a story`,
+  }
+  const interactionTitle = interactionVerbs[parsed.interaction_type ?? '']
+    ?? `${personA.name} and ${personB.name} cross paths`
+
   // Create a public event for this interaction
   await db.from('public_events').insert({
     world_id: world.id,
     event_type: eventType,
-    title: `${personA.name} and ${personB.name}: ${parsed.interaction_type ?? 'an encounter'}`,
+    title: interactionTitle,
     description: `${parsed.what_happens}${parsed.a_says ? ` "${parsed.a_says}"` : ''}${parsed.b_says ? ` "${parsed.b_says}"` : ''}`,
     primary_person_id: personA.id as string,
     significance_score: significance,
     is_milestone: significance >= 60,
-    is_featured: significance >= 50,
+    is_featured: false,
     in_game_day: world.in_game_day,
     in_game_year: world.in_game_year,
     metadata: {

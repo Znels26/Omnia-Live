@@ -162,24 +162,55 @@ export function WorldViewer({
     const celestialY = (100 - Math.sin(dayProgress * Math.PI) * 80) * scaleY;
 
     if (worldTime >= 5 && worldTime <= 20) {
-      // Sun
-      const sunGlow = ctx.createRadialGradient(celestialX, celestialY, 0, celestialX, celestialY, 60 * scaleX);
-      sunGlow.addColorStop(0, "rgba(255, 230, 150, 0.3)");
-      sunGlow.addColorStop(1, "rgba(255, 150, 50, 0)");
-      ctx.fillStyle = sunGlow;
+      // Sun — outer corona, mid glow, sharp disc
+      const sunAngle = (worldTime - 5) / 15; // 0=dawn, 1=dusk
+      const isLowSun = sunAngle < 0.15 || sunAngle > 0.85;
+      const sunColor = isLowSun ? 'rgba(255,160,60,' : 'rgba(255,230,150,';
+      const coronaR = isLowSun ? 90 * scaleX : 70 * scaleX;
+      // Outer corona
+      const corona = ctx.createRadialGradient(celestialX, celestialY, 0, celestialX, celestialY, coronaR);
+      corona.addColorStop(0, `${sunColor}0.22)`);
+      corona.addColorStop(0.45, `${sunColor}0.10)`);
+      corona.addColorStop(1, `${sunColor}0)`);
+      ctx.fillStyle = corona;
       ctx.beginPath();
-      ctx.arc(celestialX, celestialY, 60 * scaleX, 0, Math.PI * 2);
+      ctx.arc(celestialX, celestialY, coronaR, 0, Math.PI * 2);
       ctx.fill();
-
-      ctx.fillStyle = "#ffe89a";
+      // Mid glow
+      const midGlow = ctx.createRadialGradient(celestialX, celestialY, 0, celestialX, celestialY, 28 * scaleX);
+      midGlow.addColorStop(0, `${sunColor}0.55)`);
+      midGlow.addColorStop(1, `${sunColor}0)`);
+      ctx.fillStyle = midGlow;
       ctx.beginPath();
-      ctx.arc(celestialX, celestialY, 14 * scaleX, 0, Math.PI * 2);
+      ctx.arc(celestialX, celestialY, 28 * scaleX, 0, Math.PI * 2);
+      ctx.fill();
+      // Sharp disc
+      ctx.fillStyle = isLowSun ? '#ffcc70' : '#fff5c0';
+      ctx.beginPath();
+      ctx.arc(celestialX, celestialY, 12 * scaleX, 0, Math.PI * 2);
+      ctx.fill();
+      // Bright core
+      ctx.fillStyle = '#fffde8';
+      ctx.beginPath();
+      ctx.arc(celestialX, celestialY, 6 * scaleX, 0, Math.PI * 2);
       ctx.fill();
     } else {
-      // Moon
-      ctx.fillStyle = "rgba(220, 215, 200, 0.9)";
+      // Moon — disc + subtle halo
+      const moonHalo = ctx.createRadialGradient(celestialX, celestialY, 0, celestialX, celestialY, 22 * scaleX);
+      moonHalo.addColorStop(0, 'rgba(220,215,200,0.15)');
+      moonHalo.addColorStop(1, 'rgba(200,210,230,0)');
+      ctx.fillStyle = moonHalo;
+      ctx.beginPath();
+      ctx.arc(celestialX, celestialY, 22 * scaleX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "rgba(230, 225, 210, 0.92)";
       ctx.beginPath();
       ctx.arc(celestialX, celestialY, 10 * scaleX, 0, Math.PI * 2);
+      ctx.fill();
+      // Crater shadow for realism
+      ctx.fillStyle = "rgba(180, 175, 165, 0.35)";
+      ctx.beginPath();
+      ctx.arc(celestialX + 3 * scaleX, celestialY - 2 * scaleY, 4 * scaleX, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -218,14 +249,20 @@ export function WorldViewer({
     // ── Ground plane ──────────────────────────────────────────────
     {
       const groundGrad = ctx.createLinearGradient(0, horizonY, 0, H);
-      const gBase = ambientLight > 0.5
-        ? `rgba(38,58,28,${0.5 + ambientLight * 0.3})`
-        : `rgba(18,28,14,${0.4 + ambientLight * 0.3})`;
-      const gEdge = ambientLight > 0.5
-        ? `rgba(28,42,20,${0.6 + ambientLight * 0.2})`
-        : `rgba(10,16,8,0.7)`;
-      groundGrad.addColorStop(0, gBase);
-      groundGrad.addColorStop(1, gEdge);
+      if (ambientLight > 0.6) {
+        // Rich daytime valley floor — warm greens with earthy undertone
+        groundGrad.addColorStop(0, `rgba(62,90,38,${0.55 + ambientLight * 0.25})`);
+        groundGrad.addColorStop(0.4, `rgba(52,80,30,${0.65 + ambientLight * 0.2})`);
+        groundGrad.addColorStop(1, `rgba(40,62,22,${0.75 + ambientLight * 0.1})`);
+      } else if (ambientLight > 0.3) {
+        // Dusk/dawn — cooler, desaturated greens
+        groundGrad.addColorStop(0, `rgba(40,58,28,${0.5 + ambientLight * 0.3})`);
+        groundGrad.addColorStop(1, `rgba(28,44,18,0.8)`);
+      } else {
+        // Night — dark earth
+        groundGrad.addColorStop(0, `rgba(16,24,10,${0.7 + ambientLight * 0.2})`);
+        groundGrad.addColorStop(1, `rgba(8,14,5,0.9)`);
+      }
       ctx.fillStyle = groundGrad;
       ctx.fillRect(0, horizonY, W, H - horizonY);
     }
@@ -1272,11 +1309,22 @@ function drawRegion(
     ctx.globalAlpha = 1;
   }
 
-  // Region label
-  ctx.fillStyle = `rgba(220, 210, 200, ${0.45 * ambientLight + 0.15})`;
-  ctx.font = `italic ${9 * Math.min(scaleX, scaleY)}px var(--font-display, Georgia, serif)`;
-  ctx.textAlign = "center";
-  ctx.fillText(region.name, x, y + 4 * scaleY);
+  // Region label — pill background + text
+  {
+    const fs = 9 * Math.min(scaleX, scaleY);
+    ctx.font = `italic ${fs}px var(--font-display, Georgia, serif)`;
+    ctx.textAlign = "center";
+    const tw = ctx.measureText(region.name).width;
+    ctx.save();
+    ctx.globalAlpha = 0.35 * ambientLight + 0.12;
+    ctx.fillStyle = 'rgba(5,5,10,0.7)';
+    rrect(ctx, x - tw / 2 - 5, y - fs * 0.9, tw + 10, fs * 1.4, 3);
+    ctx.fill();
+    ctx.globalAlpha = 0.7 * ambientLight + 0.25;
+    ctx.fillStyle = 'rgba(230,220,205,1)';
+    ctx.fillText(region.name, x, y + fs * 0.45);
+    ctx.restore();
+  }
 }
 
 function drawCropField(
@@ -2070,19 +2118,19 @@ function drawHillLayers(
   const isDawn = worldTime >= 5 && worldTime < 9;
   const isDusk = worldTime >= 17 && worldTime < 21;
 
-  // 3 hill layers from far to near, each progressively darker/greener
+  // 3 hill layers from far to near — each closer layer is warmer and greener
   const layers: Array<{ peaks: [number, number][]; r: number; g: number; b: number; baseY: number }> = [
     {
       peaks: [[0,0.445],[0.12,0.415],[0.26,0.43],[0.42,0.405],[0.58,0.42],[0.74,0.41],[0.88,0.43],[1,0.445]],
-      r: 32, g: 45, b: 24, baseY: 0.445,
+      r: 38, g: 60, b: 30, baseY: 0.445,
     },
     {
       peaks: [[0,0.46],[0.1,0.435],[0.24,0.45],[0.4,0.425],[0.56,0.44],[0.72,0.43],[0.86,0.45],[1,0.46]],
-      r: 40, g: 56, b: 28, baseY: 0.46,
+      r: 50, g: 78, b: 36, baseY: 0.46,
     },
     {
       peaks: [[0,0.475],[0.08,0.455],[0.22,0.465],[0.38,0.448],[0.54,0.46],[0.7,0.452],[0.85,0.465],[1,0.475]],
-      r: 50, g: 68, b: 34, baseY: 0.475,
+      r: 62, g: 95, b: 42, baseY: 0.475,
     },
   ];
 
@@ -2137,14 +2185,36 @@ function drawGroundTexture(
   scaleY: number,
   ambientLight: number
 ) {
-  if (ambientLight < 0.25) return;
+  if (ambientLight < 0.2) return;
 
   const horizonY = H * 0.48;
-  const lf = ambientLight * 0.55 + 0.08;
+  const lf = ambientLight * 0.6 + 0.1;
 
+  // ── Earthy colour patches (subtle terrain variation) ─────────
+  if (ambientLight > 0.4) {
+    const patches = [
+      { x: 0.12, y: 0.62, r: 0.14, col: 'rgba(72,100,42,' },
+      { x: 0.38, y: 0.70, r: 0.10, col: 'rgba(58,88,34,' },
+      { x: 0.62, y: 0.65, r: 0.13, col: 'rgba(68,96,40,' },
+      { x: 0.80, y: 0.75, r: 0.11, col: 'rgba(55,82,32,' },
+      { x: 0.25, y: 0.82, r: 0.12, col: 'rgba(75,106,45,' },
+      { x: 0.55, y: 0.88, r: 0.09, col: 'rgba(60,92,38,' },
+    ];
+    for (const p of patches) {
+      const px = p.x * W, py = p.y * H;
+      const prx = p.r * W, pry = p.r * H * 0.5;
+      const pg = ctx.createRadialGradient(px, py, 0, px, py, prx);
+      pg.addColorStop(0, `${p.col}${0.18 * ambientLight})`);
+      pg.addColorStop(1, `${p.col}0)`);
+      ctx.fillStyle = pg;
+      ctx.beginPath();
+      ctx.ellipse(px, py, prx, pry, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // ── Grass tufts ───────────────────────────────────────────────
   ctx.save();
-  ctx.strokeStyle = `rgba(55,80,30,${0.22 * lf})`;
-  ctx.lineWidth = 0.9 * scaleX;
   ctx.lineCap = 'round';
 
   const spacingX = 20 * scaleX;
@@ -2153,21 +2223,23 @@ function drawGroundTexture(
   for (let gx = 0; gx < W; gx += spacingX) {
     for (let gy = horizonY; gy < H; gy += spacingY) {
       const depth = (gy - horizonY) / (H - horizonY);
-      // More grass density in foreground, sparse near horizon
       if (pseudoRand(gx * 0.05 + gy * 0.04) > depth * 0.85 + 0.15) continue;
 
-      // Deterministic jitter
       const jx = (pseudoRand(gx * 7919 * 0.001 + gy * 6271 * 0.001) - 0.5) * spacingX * 0.8;
       const jy = (pseudoRand(gx * 3571 * 0.001 + gy * 7993 * 0.001) - 0.5) * spacingY * 0.6;
       const tx = gx + jx;
       const ty = gy + jy;
-      const gh = (1.5 + depth * 4) * scaleY;
-      const lean = (pseudoRand(tx * 0.1 + ty * 0.07) - 0.5) * 2 * scaleX;
+      const gh = (1.5 + depth * 5) * scaleY;
+      const lean = (pseudoRand(tx * 0.1 + ty * 0.07) - 0.5) * 2.5 * scaleX;
 
+      // Vary grass colour slightly
+      const shade = 0.18 + pseudoRand(tx * 0.03 + ty * 0.02) * 0.15;
+      ctx.strokeStyle = `rgba(65,95,35,${shade * lf})`;
+      ctx.lineWidth = 0.9 * scaleX;
       ctx.beginPath();
-      ctx.moveTo(tx - 2.2 * scaleX, ty);
+      ctx.moveTo(tx - 2.5 * scaleX, ty);
       ctx.lineTo(tx + lean, ty - gh);
-      ctx.moveTo(tx + 2.2 * scaleX, ty);
+      ctx.moveTo(tx + 2.5 * scaleX, ty);
       ctx.lineTo(tx + lean, ty - gh);
       ctx.stroke();
     }
