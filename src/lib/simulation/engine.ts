@@ -534,27 +534,77 @@ function tickPerson(p: DbPerson, day: number, year: number): PersonTickResult {
 // World-level event generation
 // ---------------------------------------------------------------------------
 
-function generateWorldEvents(
+// ---------------------------------------------------------------------------
+// Birth names pool — draw from without replacement via a simple cycle
+// ---------------------------------------------------------------------------
+const BIRTH_NAMES = [
+  "Asha","Bren","Cael","Dara","Elin","Fion","Gwen","Hale","Ivy","Jael",
+  "Kael","Lyra","Mira","Nael","Oryn","Prae","Quen","Rael","Sera","Tael",
+  "Uren","Vela","Wren","Xael","Yara","Zael","Arne","Bela","Cira","Dren",
+  "Egan","Fara","Gael","Hira","Ilan","Jora","Kira","Lorn","Mael","Nora",
+];
+
+async function generateWorldEvents(
+  db: ReturnType<typeof createAdminClient>,
   worldId: string,
   persons: DbPerson[],
   settlements: DbSettlement[],
+  cultures: DbCulture[],
   day: number,
   year: number
-): PendingEvent[] {
+): Promise<PendingEvent[]> {
   const events: PendingEvent[] = [];
   const alive = persons.filter((p) => p.is_alive);
 
-  // Birth event
+  // ── Birth: ~1 per 8 minutes at 3s/tick (0.6% chance per tick) ──────────────
   const fertile = alive.filter((p) => p.age >= 16 && p.age <= 45);
-  if (fertile.length >= 2 && Math.random() < 0.03) {
+  if (fertile.length >= 2 && Math.random() < 0.006) {
     const parent = fertile[Math.floor(Math.random() * fertile.length)];
-    const childNames = ["Asha", "Bren", "Cael", "Dara", "Elin", "Fion", "Gwen", "Hale", "Ivy", "Jael"];
-    const childName = childNames[Math.floor(Math.random() * childNames.length)];
+    const childName = BIRTH_NAMES[Math.floor(Math.random() * BIRTH_NAMES.length)];
+    const crossClanParent = alive.find(p => p.culture_id !== parent.culture_id && p.age >= 16 && p.age <= 45);
+    const otherParentName = crossClanParent?.name;
+
     const birthDescs = [
       `${childName} is born before dawn, small and loud. ${parent.name} does not sleep. By morning, the whole settlement knows.`,
-      `${parent.name} holds ${childName} for the first time — a new life in the valley, one more soul to feed, to protect, to watch grow.`,
+      `${parent.name} holds ${childName} for the first time — a new life in the valley, one more soul to feed and protect.`,
       `The birth was hard. ${parent.name} survived it. So did ${childName}. The valley has one more person now.`,
-    ];
+      otherParentName
+        ? `Born of two clans, ${childName} enters the world. ${parent.name} of the ${cultures.find(c=>c.id===parent.culture_id)?.name??'valley'} and ${otherParentName} stand together. The child bridges old divides.`
+        : `A cry in the night. By morning ${childName} is here — new lungs, new hunger, new hope.`,
+    ].filter(Boolean) as string[];
+
+    // Actually create the child as a new person in DB
+    try {
+      await db.from("persons").insert({
+        world_id: worldId,
+        name: childName,
+        age: 0,
+        life_stage: "infant",
+        occupation: null,
+        is_alive: true,
+        is_featured: false,
+        health_score: 8,
+        happiness_score: 7,
+        need_hunger: 5,
+        need_stress: 2,
+        need_hope: 3,
+        need_fatigue: 3,
+        need_belonging: 4,
+        need_safety: 3,
+        culture_id: parent.culture_id,
+        residence_id: parent.residence_id,
+        pos_x: parent.pos_x + Math.round((Math.random()-0.5)*20),
+        pos_y: parent.pos_y + Math.round((Math.random()-0.5)*15),
+        trait_ambition: 5, trait_aggression: 3, trait_loyalty: 6,
+        trait_sociability: 6, trait_curiosity: 7, trait_spirituality: 4,
+        trait_generosity: 5, trait_honesty: 7, trait_vindictiveness: 2,
+        current_action: "Sleeping in their mother\'s arms",
+        metadata: { backstory: `Child of ${parent.name}, born on day ${day} of year ${year}.` },
+      });
+      // Boost parent happiness
+      await db.from("persons").update({ happiness_score: Math.min(10, (parent.happiness_score ?? 6) + 2) }).eq("id", parent.id);
+    } catch { /* non-fatal */ }
+
     events.push({
       world_id: worldId,
       event_type: "BIRTH",
@@ -562,7 +612,7 @@ function generateWorldEvents(
       description: birthDescs[Math.floor(Math.random() * birthDescs.length)],
       primary_person_id: parent.id,
       settlement_id: parent.residence_id,
-      significance_score: 35,
+      significance_score: 40,
       is_milestone: false,
       is_featured: false,
       in_game_day: day,
@@ -571,46 +621,127 @@ function generateWorldEvents(
     });
   }
 
-  // Marriage event
-  if (alive.length >= 2 && Math.random() < 0.015) {
+  // ── Marriage: ~1 per 20 minutes (0.25% chance). Prefer same-clan but allow cross-clan ──
+  if (alive.length >= 4 && Math.random() < 0.0025) {
     const adults = alive.filter((p) => p.age >= 18 && p.age <= 50);
     if (adults.length >= 2) {
-      const shuffled = [...adults].sort(() => Math.random() - 0.5);
-      const a = shuffled[0];
-      const b = shuffled[1];
-      const marriageDescs = [
-        `${a.name} and ${b.name} made their vows at dusk, the fire between them. The settlement feasted late into the night.`,
-        `It was not arranged. It was not expected. But ${a.name} and ${b.name} stood before the clan and spoke plainly. The valley approves.`,
-        `${a.name} and ${b.name} have been inseparable for months. Now it is made formal. Two households, one hearth.`,
-      ];
-      events.push({
-        world_id: worldId,
-        event_type: "MARRIAGE",
-        title: `${a.name} and ${b.name} are joined`,
-        description: marriageDescs[Math.floor(Math.random() * marriageDescs.length)],
-        primary_person_id: a.id,
-        settlement_id: a.residence_id,
-        significance_score: 45,
-        is_milestone: false,
-        is_featured: false,
-        in_game_day: day,
-        in_game_year: year,
-        metadata: { person_a: a.name, person_b: b.name },
-      });
+      // 70% same-clan, 30% cross-clan
+      const crossClan = Math.random() < 0.3 && cultures.length >= 2;
+      let a = adults[Math.floor(Math.random() * adults.length)];
+      let b: typeof a | undefined;
+
+      if (crossClan) {
+        // Pick b from a different clan
+        const otherClan = adults.filter(p => p.culture_id !== a.culture_id);
+        b = otherClan[Math.floor(Math.random() * otherClan.length)];
+      } else {
+        const sameClan = adults.filter(p => p.culture_id === a.culture_id && p.id !== a.id);
+        b = sameClan[Math.floor(Math.random() * sameClan.length)];
+        if (!b) b = adults.find(p => p.id !== a.id);
+      }
+
+      if (b) {
+        const clanA = cultures.find(c => c.id === a.culture_id)?.name ?? "the valley";
+        const clanB = cultures.find(c => c.id === b.culture_id)?.name ?? "the valley";
+        const isCrossMarriage = a.culture_id !== b.culture_id;
+
+        const marriageDescs = isCrossMarriage ? [
+          `${a.name} of the ${clanA} and ${b.name} of the ${clanB} are joined at the river crossing. Both clans attended. Both clans watched the other carefully.`,
+          `A union no one expected. ${a.name} and ${b.name} come from different peoples — different customs, different fires. They chose each other anyway.`,
+          `The ${clanA} and the ${clanB} share a fire for the first time in memory. ${a.name} and ${b.name} are the reason.`,
+        ] : [
+          `${a.name} and ${b.name} made their vows at dusk, the fire between them. The settlement feasted late into the night.`,
+          `${a.name} and ${b.name} stood before the clan and spoke plainly. Two households, one hearth.`,
+          `${a.name} and ${b.name} have been inseparable for months. Now it is made formal.`,
+        ];
+
+        // Create relationship record
+        try {
+          await db.from("relationships").insert({
+            world_id: worldId,
+            person_a_id: a.id,
+            person_b_id: b.id,
+            relationship_type: "spouse",
+            trust: 8, attraction: 7, resentment: 0,
+            is_active: true,
+            started_day: day,
+          });
+          // Move b to live near a, boost both happiness
+          await db.from("persons").update({
+            pos_x: Math.max(30, Math.min(770, a.pos_x + Math.round((Math.random()-0.5)*30))),
+            pos_y: Math.max(50, Math.min(510, a.pos_y + Math.round((Math.random()-0.5)*25))),
+            happiness_score: Math.min(10, (b.happiness_score ?? 6) + 3),
+            residence_id: a.residence_id,
+          }).eq("id", b.id);
+          await db.from("persons").update({ happiness_score: Math.min(10, (a.happiness_score ?? 6) + 3) }).eq("id", a.id);
+
+          // Cross-clan marriage improves relations between clans
+          if (isCrossMarriage) {
+            const aMeta = ((cultures.find(c=>c.id===a.culture_id) as any)?.metadata ?? {}) as Record<string,unknown>;
+            const aRels = (aMeta.relations as Record<string,string>) ?? {};
+            if ((aRels[b.culture_id!] ?? "neutral") !== "hostile") {
+              aRels[b.culture_id!] = "allied";
+              await db.from("cultures").update({ metadata: { ...aMeta, relations: aRels } }).eq("id", a.culture_id!);
+            }
+          }
+        } catch { /* non-fatal */ }
+
+        events.push({
+          world_id: worldId,
+          event_type: "MARRIAGE",
+          title: isCrossMarriage
+            ? `${a.name} (${clanA}) and ${b.name} (${clanB}) are joined — two clans, one hearth`
+            : `${a.name} and ${b.name} are joined`,
+          description: marriageDescs[Math.floor(Math.random() * marriageDescs.length)],
+          primary_person_id: a.id,
+          settlement_id: a.residence_id,
+          significance_score: isCrossMarriage ? 70 : 45,
+          is_milestone: isCrossMarriage,
+          is_featured: isCrossMarriage,
+          in_game_day: day,
+          in_game_year: year,
+          metadata: { person_a: a.name, person_b: b.name, cross_clan: isCrossMarriage },
+        });
+      }
     }
   }
 
-  // Crime / conflict event
-  if (Math.random() < 0.01 && alive.length > 0) {
+  // ── Crime / betrayal: ~1 per 5 minutes (0.3% chance) ─────────────────────
+  if (Math.random() < 0.003 && alive.length > 0) {
     const offender = alive[Math.floor(Math.random() * alive.length)];
-    const crimePool: Array<[string, string, string]> = [
-      ["theft", `${offender.name} caught stealing from the storehouse`, `Three days' worth of grain, gone. Eyes turned to ${offender.name}. The accused said nothing. Tensions are high.`],
-      ["trespass", `${offender.name} found in forbidden territory`, `${offender.name} was discovered where they had no right to be. Whether it was curiosity or calculation, the clan wants answers.`],
-      ["assault", `${offender.name} strikes a fellow valley dweller`, `Voices were raised, then fists. ${offender.name} struck first. The injured party is recovering. The matter is not yet settled.`],
-      ["poaching", `${offender.name} accused of poaching on another clan's land`, `The tracks led back to ${offender.name}. A deer taken from grounds that were not theirs to hunt. The other clan has heard.`],
-      ["deception", `${offender.name} caught in a lie`, `A trade that seemed fair turned sour when the truth came out. ${offender.name} knew all along. Trust is harder to rebuild than a fence.`],
+    // Cross-clan crimes raise tension between clans
+    const victim = alive.find(p => p.id !== offender.id && Math.random() < 0.4);
+    const crossClanCrime = victim && victim.culture_id !== offender.culture_id;
+
+    const crimePool: Array<[string, string, string, number]> = [
+      ["theft", `${offender.name} caught stealing from the storehouse`,
+        `Three days' worth of grain, gone. Eyes turned to ${offender.name}. The accused said nothing. Tensions are high.`, 30],
+      ["assault", `${offender.name} strikes ${victim?.name ?? "a valley dweller"}`,
+        `Voices raised, then fists. ${offender.name} struck first. The injured party is recovering. The matter is not yet settled.`, 40],
+      ["poaching", `${offender.name} caught hunting on ${crossClanCrime ? `${cultures.find(c=>c.id===victim?.culture_id)?.name??'another clan'}'s land` : "forbidden ground"}`,
+        `The tracks led back to ${offender.name}. ${crossClanCrime ? `The ${cultures.find(c=>c.id===victim?.culture_id)?.name??'other clan'} has heard. This will not be forgotten.` : "A line was crossed."}`, crossClanCrime ? 55 : 30],
+      ["deception", `${offender.name} caught in a lie`,
+        `A trade turned sour when the truth emerged. ${offender.name} knew all along. Trust is harder to rebuild than a fence.`, 35],
     ];
-    const [crime, crimeTitle, crimeDesc] = crimePool[Math.floor(Math.random() * crimePool.length)];
+    const [crime, crimeTitle, crimeDesc, sig] = crimePool[Math.floor(Math.random() * crimePool.length)];
+
+    // Cross-clan crimes raise inter-clan tension
+    if (crossClanCrime && victim) {
+      try {
+        const offMeta = (persons.find(p=>p.id===offender.id) as any)?.metadata ?? {};
+        const clanMeta = ((await db.from("cultures").select("metadata").eq("id", offender.culture_id!).single()).data?.metadata ?? {}) as Record<string,unknown>;
+        const clanRels = (clanMeta.relations as Record<string,string>) ?? {};
+        const clanTensions = (clanMeta.tensions as Record<string,number>) ?? {};
+        clanTensions[victim.culture_id!] = Math.min(100, (clanTensions[victim.culture_id!] ?? 0) + 15);
+        await db.from("cultures").update({ metadata: { ...clanMeta, relations: clanRels, tensions: clanTensions } }).eq("id", offender.culture_id!);
+      } catch { /* non-fatal */ }
+    }
+
+    // Harm victim's health slightly
+    if (victim && crime === "assault") {
+      await db.from("persons").update({ health_score: Math.max(1, (victim.health_score ?? 7) - 1) }).eq("id", victim.id);
+    }
+
     events.push({
       world_id: worldId,
       event_type: "BETRAYAL",
@@ -618,24 +749,30 @@ function generateWorldEvents(
       description: crimeDesc,
       primary_person_id: offender.id,
       settlement_id: offender.residence_id,
-      significance_score: 30,
+      significance_score: sig,
       is_milestone: false,
-      is_featured: false,
+      is_featured: crossClanCrime ?? false,
       in_game_day: day,
       in_game_year: year,
-      metadata: { crime },
+      metadata: { crime, cross_clan: crossClanCrime },
     });
   }
 
-  // Seasonal milestone (every 91 days)
+  // ── Seasonal milestone (every 91 days) ────────────────────────────────────
   if (day % 91 === 0 && day > 0) {
     const seasons = ["spring", "summer", "autumn", "winter"];
     const season = seasons[Math.floor((day / 91) % 4)];
+    const seasonDescs: Record<string, string> = {
+      spring: "The frost breaks. Hunting parties head out at first light. The fields are turned and seeded. The valley breathes again.",
+      summer: "Long days, heavy work. The crops grow tall. Children run. The elders watch the sky for signs of drought.",
+      autumn: "Harvest time. Everything that can be stored, is stored. The nights grow longer. The question is always: will it be enough?",
+      winter: "The valley hunkers down. Fires burn low but constant. Stories are told. Old grievances are remembered, and new plans are made.",
+    };
     events.push({
       world_id: worldId,
       event_type: "RITUAL",
-      title: `The valley marks the turn of ${season}`,
-      description: "Communities across First Valley gather to observe the change of season.",
+      title: `${season.charAt(0).toUpperCase() + season.slice(1)} comes to First Valley`,
+      description: seasonDescs[season],
       primary_person_id: null,
       settlement_id: settlements[0]?.id ?? null,
       significance_score: 60,
@@ -647,21 +784,22 @@ function generateWorldEvents(
     });
   }
 
-  // Year milestone
+  // ── Year milestone ────────────────────────────────────────────────────────
   if (day % 365 === 0 && day > 0) {
+    const pop = alive.length;
     events.push({
       world_id: worldId,
       event_type: "ERA_TRANSITION",
       title: `Year ${year} begins in First Valley`,
-      description: "Another year has passed. The valley endures.",
+      description: `Another year has turned. ${pop} souls remain in the valley. Some have grown. Some have left. Some will not see another year.`,
       primary_person_id: null,
       settlement_id: null,
-      significance_score: 80,
+      significance_score: 85,
       is_milestone: true,
       is_featured: true,
       in_game_day: day,
       in_game_year: year,
-      metadata: { year },
+      metadata: { year, population: pop },
     });
   }
 
@@ -913,133 +1051,208 @@ async function tickClanRelations(
 
     const meta = (culture.metadata ?? {}) as Record<string, unknown>;
     const relations = (meta.relations as Record<string, string>) ?? {};
+    const tensions = (meta.tensions as Record<string, number>) ?? {};
 
-    // Check each hostile relation — run a battle tick
+    // ── Active war: run battle ticks ──────────────────────────────────────
     for (const [enemyId, relation] of Object.entries(relations)) {
       if (relation !== "hostile") continue;
 
       const enemy = cultures.find((c) => c.id === enemyId);
       if (!enemy || enemy.population_estimate <= 0) {
-        // Enemy wiped out — war ends
         relations[enemyId] = "neutral";
+        tensions[enemyId] = 0;
         events.push({
           world_id: worldId,
           event_type: "CUSTOM",
-          title: `${culture.name} claims victory`,
-          description: `The ${culture.name} have crushed the ${enemy?.name ?? "enemy"} and emerged victorious from the conflict.`,
-          primary_person_id: null,
-          settlement_id: null,
-          significance_score: 90,
-          is_milestone: true,
-          is_featured: true,
-          in_game_day: day,
-          in_game_year: year,
+          title: `${culture.name} claims victory over ${enemy?.name ?? "their enemy"}`,
+          description: `The long conflict ends. The ${culture.name} stand victorious. The valley will remember what was lost on both sides.`,
+          primary_person_id: null, settlement_id: null,
+          significance_score: 95, is_milestone: true, is_featured: true,
+          in_game_day: day, in_game_year: year,
           metadata: { victor: culture.id, defeated: enemyId },
         });
         continue;
       }
 
-      // Battle: both sides lose population each tick they're at war (only from the attacker's perspective to avoid double-processing)
+      // Process each war pair once (lower ID runs it)
       if (culture.id < enemy.id) {
-        // Process this pair once (lower ID side runs the battle)
         const attackerLoss = Math.floor(Math.random() * 3);
         const defenderLoss = Math.floor(Math.random() * 3);
-        const newAttackerPop = Math.max(0, culture.population_estimate - attackerLoss);
-        const newDefenderPop = Math.max(0, enemy.population_estimate - defenderLoss);
+        await db.from("cultures").update({ population_estimate: Math.max(0, culture.population_estimate - attackerLoss) }).eq("id", culture.id);
+        await db.from("cultures").update({ population_estimate: Math.max(0, enemy.population_estimate - defenderLoss) }).eq("id", enemy.id);
 
-        await db.from("cultures").update({ population_estimate: newAttackerPop }).eq("id", culture.id);
-        await db.from("cultures").update({ population_estimate: newDefenderPop }).eq("id", enemy.id);
+        // Injure random warriors from each side
+        const warriors = await db.from("persons").select("id, health_score, occupation")
+          .eq("world_id", worldId).eq("is_alive", true).limit(50);
+        const warPersons = (warriors.data ?? []) as Array<{id:string; health_score:number; occupation:string|null; culture_id?:string}>;
+        const sideA = warPersons.filter(p => p.culture_id === culture.id && /warrior|guard|soldier|scout/i.test(p.occupation ?? ""));
+        const sideB = warPersons.filter(p => p.culture_id === enemy.id && /warrior|guard|soldier|scout/i.test(p.occupation ?? ""));
+        for (const warrior of sideA.slice(0,1)) {
+          if (Math.random() < 0.3) await db.from("persons").update({ health_score: Math.max(1, warrior.health_score - 2) }).eq("id", warrior.id);
+        }
+        for (const warrior of sideB.slice(0,1)) {
+          if (Math.random() < 0.3) await db.from("persons").update({ health_score: Math.max(1, warrior.health_score - 2) }).eq("id", warrior.id);
+        }
 
-        // Occasional visible battle event (not every tick — 20% chance)
-        if (Math.random() < 0.2) {
+        // Visible battle event (30% chance per tick to avoid noise)
+        if (Math.random() < 0.3) {
           const attackerWins = attackerLoss < defenderLoss;
+          const battleDescs = [
+            `${culture.name} warriors push into ${enemy.name} territory at dawn. ${attackerWins ? `The ${enemy.name} line breaks.` : `They are driven back before midday.`}`,
+            `A skirmish at the river crossing. Both sides bleed. Neither yields ground. The valley holds its breath.`,
+            `${attackerWins ? culture.name : enemy.name} fighters seize a hill overlooking the valley. The other side regroups in the shadow of the treeline.`,
+            `Bodies are carried home from both camps. Children watch in silence. The elders say nothing they haven't said before.`,
+          ];
           events.push({
-            world_id: worldId,
-            event_type: "BATTLE",
-            title: `${culture.name} and ${enemy.name} clash`,
-            description: attackerWins
-              ? `The ${culture.name} press their advantage against the ${enemy.name}. The ${enemy.name} suffer greater losses.`
-              : `The ${enemy.name} repel an assault by the ${culture.name}, inflicting heavy casualties.`,
-            primary_person_id: null,
-            settlement_id: null,
-            significance_score: 65,
-            is_milestone: false,
-            is_featured: false,
-            in_game_day: day,
-            in_game_year: year,
-            metadata: {
-              attacker: culture.id,
-              defender: enemy.id,
-              attacker_loss: attackerLoss,
-              defender_loss: defenderLoss,
-            },
+            world_id: worldId, event_type: "BATTLE",
+            title: `${culture.name} and ${enemy.name} — the war continues`,
+            description: battleDescs[Math.floor(Math.random() * battleDescs.length)],
+            primary_person_id: null, settlement_id: null,
+            significance_score: 70, is_milestone: false, is_featured: true,
+            in_game_day: day, in_game_year: year,
+            metadata: { attacker: culture.id, defender: enemy.id, attacker_loss: attackerLoss, defender_loss: defenderLoss },
           });
         }
 
-        // 2% chance per tick of peace breaking out
-        if (Math.random() < 0.02) {
+        // Peace: 1.5% chance per tick once started (~7 real minutes)
+        if (Math.random() < 0.015) {
           relations[enemyId] = "neutral";
+          tensions[enemyId] = 20; // lingering tension even after peace
           const enemyMeta = (enemy.metadata ?? {}) as Record<string, unknown>;
           const enemyRelations = (enemyMeta.relations as Record<string, string>) ?? {};
+          const enemyTensions = (enemyMeta.tensions as Record<string, number>) ?? {};
           enemyRelations[culture.id] = "neutral";
-          await db.from("cultures").update({ metadata: { ...enemyMeta, relations: enemyRelations } }).eq("id", enemy.id);
+          enemyTensions[culture.id] = 20;
+          await db.from("cultures").update({ metadata: { ...enemyMeta, relations: enemyRelations, tensions: enemyTensions } }).eq("id", enemy.id);
 
+          const peaceDescs = [
+            `Exhausted and bloodied, the ${culture.name} and the ${enemy.name} send word through a neutral messenger. Fighting stops. For now.`,
+            `A child from one clan is found sheltering with the other. Something in the valley shifts. The fighting pauses — then stops.`,
+            `Terms are spoken at the tree line. Both sides give something. Both sides lose something. The valley can breathe.`,
+          ];
           events.push({
-            world_id: worldId,
-            event_type: "CUSTOM",
-            title: `${culture.name} and ${enemy.name} agree to peace`,
-            description: `After bitter conflict, the ${culture.name} and ${enemy.name} lay down their arms. An uneasy peace settles over the valley.`,
-            primary_person_id: null,
-            settlement_id: null,
-            significance_score: 80,
-            is_milestone: true,
-            is_featured: true,
-            in_game_day: day,
-            in_game_year: year,
+            world_id: worldId, event_type: "PEACE_TREATY",
+            title: `${culture.name} and ${enemy.name} agree to cease fighting`,
+            description: peaceDescs[Math.floor(Math.random() * peaceDescs.length)],
+            primary_person_id: null, settlement_id: null,
+            significance_score: 85, is_milestone: true, is_featured: true,
+            in_game_day: day, in_game_year: year,
             metadata: { clan_a: culture.id, clan_b: enemy.id },
           });
         }
       }
     }
 
-    // Update this culture's metadata if relations changed
-    await db.from("cultures").update({ metadata: { ...meta, relations } }).eq("id", culture.id);
+    // ── Tension escalation: passive drift and triggering war ─────────────
+    // Tensions naturally decay toward zero when no incidents
+    for (const otherId of Object.keys(tensions)) {
+      tensions[otherId] = Math.max(0, tensions[otherId] - 0.2);
+      if (tensions[otherId] < 1) delete tensions[otherId];
+    }
 
-    // Chance of a new war breaking out between high-aggression cultures (1 per 50 days on average)
-    if (Math.random() < 0.02 && culture.aggression_level > 60) {
-      const target = cultures.find(
-        (c) =>
-          c.id !== culture.id &&
-          c.population_estimate > 5 &&
-          (relations[c.id] ?? "neutral") === "neutral"
-      );
-      if (target) {
-        const myMeta = (culture.metadata ?? {}) as Record<string, unknown>;
-        const myRelations = (myMeta.relations as Record<string, string>) ?? {};
-        myRelations[target.id] = "hostile";
-        await db.from("cultures").update({ metadata: { ...myMeta, relations: myRelations } }).eq("id", culture.id);
+    // Aggressive clans slowly build tension with their closest rival
+    if (culture.aggression_level > 40) {
+      const rivals = cultures.filter(c => c.id !== culture.id && c.population_estimate > 3 && (relations[c.id] ?? "neutral") !== "hostile");
+      if (rivals.length > 0) {
+        const rival = rivals[Math.floor(Math.random() * rivals.length)];
+        // Tension drifts up slowly (0–0.8 per tick based on aggression)
+        const drift = (culture.aggression_level - 40) / 100 * 0.8;
+        tensions[rival.id] = Math.min(100, (tensions[rival.id] ?? 0) + drift);
 
-        const targetMeta = (target.metadata ?? {}) as Record<string, unknown>;
-        const targetRelations = (targetMeta.relations as Record<string, string>) ?? {};
-        targetRelations[culture.id] = "hostile";
-        await db.from("cultures").update({ metadata: { ...targetMeta, relations: targetRelations } }).eq("id", target.id);
+        // Tension event thresholds: 40 = warning, 70 = skirmish, 100 = war
+        const tension = tensions[rival.id];
 
-        events.push({
-          world_id: worldId,
-          event_type: "WAR_DECLARED",
-          title: `${culture.name} declares war on ${target.name}`,
-          description: `Tensions that have simmered for seasons finally boil over. The ${culture.name} raise their banners against the ${target.name}.`,
-          primary_person_id: null,
-          settlement_id: null,
-          significance_score: 90,
-          is_milestone: true,
-          is_featured: true,
-          in_game_day: day,
-          in_game_year: year,
-          metadata: { aggressor: culture.id, target: target.id },
-        });
+        if (tension >= 40 && tension < 42) {
+          // One-time warning event at threshold
+          const tensionDescs = [
+            `The ${culture.name} and the ${rival.name} have begun to eye each other across the valley. Hunters stray close to the border. Words are exchanged that cannot be taken back.`,
+            `Something has shifted between the ${culture.name} and the ${rival.name}. Travelers report cold looks and closed gates. The valley feels smaller.`,
+            `${culture.name} scouts have been seen near ${rival.name} territory. Both clans are counting their warriors. Nobody is saying the word yet.`,
+          ];
+          events.push({
+            world_id: worldId, event_type: "CUSTOM",
+            title: `Tension rises between ${culture.name} and ${rival.name}`,
+            description: tensionDescs[Math.floor(Math.random() * tensionDescs.length)],
+            primary_person_id: null, settlement_id: null,
+            significance_score: 55, is_milestone: false, is_featured: true,
+            in_game_day: day, in_game_year: year,
+            metadata: { clan_a: culture.id, clan_b: rival.id, tension },
+          });
+        }
+
+        if (tension >= 70 && tension < 73 && Math.random() < 0.5) {
+          // Skirmish before full war
+          const skirmishDescs = [
+            `A ${culture.name} hunting party crosses into ${rival.name} land. Arrows are exchanged. Two people are injured. Nobody dead — yet.`,
+            `${culture.name} and ${rival.name} warriors meet on the border road. A ${culture.name} fighter throws the first stone. The ${rival.name} respond with spears.`,
+            `A ${rival.name} storehouse near the border is raided at night. Everyone knows who did it. Nobody can prove it. The ${rival.name} are sharpening blades.`,
+          ];
+          events.push({
+            world_id: worldId, event_type: "BATTLE",
+            title: `${culture.name} and ${rival.name}: first blood`,
+            description: skirmishDescs[Math.floor(Math.random() * skirmishDescs.length)],
+            primary_person_id: null, settlement_id: null,
+            significance_score: 75, is_milestone: false, is_featured: true,
+            in_game_day: day, in_game_year: year,
+            metadata: { clan_a: culture.id, clan_b: rival.id, tension },
+          });
+          // Injure someone from each side
+          for (const clanId of [culture.id, rival.id]) {
+            const clanPeople = await db.from("persons").select("id, health_score").eq("world_id", worldId).eq("culture_id", clanId).eq("is_alive", true).limit(5);
+            const victim = (clanPeople.data ?? [])[Math.floor(Math.random() * (clanPeople.data?.length ?? 1))];
+            if (victim) await db.from("persons").update({ health_score: Math.max(1, victim.health_score - 2) }).eq("id", victim.id);
+          }
+        }
+
+        if (tension >= 100 && (relations[rival.id] ?? "neutral") !== "hostile") {
+          // War declaration — tension reached boiling point
+          relations[rival.id] = "hostile";
+          tensions[rival.id] = 100;
+          const rivalMeta = (rival.metadata ?? {}) as Record<string, unknown>;
+          const rivalRelations = (rivalMeta.relations as Record<string, string>) ?? {};
+          const rivalTensions = (rivalMeta.tensions as Record<string, number>) ?? {};
+          rivalRelations[culture.id] = "hostile";
+          rivalTensions[culture.id] = 100;
+          await db.from("cultures").update({ metadata: { ...rivalMeta, relations: rivalRelations, tensions: rivalTensions } }).eq("id", rival.id);
+
+          const warDescs = [
+            `What began with stolen game and sharp words ends with drawn weapons. The ${culture.name} march on the ${rival.name}. The valley is at war.`,
+            `For seasons the ${culture.name} and ${rival.name} circled each other, testing the boundary. Today someone crossed it for the last time.`,
+            `The ${culture.name} leader stood before the fire and named the ${rival.name} their enemy. Before dawn the first raiding party left camp.`,
+          ];
+          events.push({
+            world_id: worldId, event_type: "WAR_DECLARED",
+            title: `War: ${culture.name} rises against ${rival.name}`,
+            description: warDescs[Math.floor(Math.random() * warDescs.length)],
+            primary_person_id: null, settlement_id: null,
+            significance_score: 95, is_milestone: true, is_featured: true,
+            in_game_day: day, in_game_year: year,
+            metadata: { aggressor: culture.id, target: rival.id },
+          });
+
+          // Move warriors toward enemy territory
+          const warriors = await db.from("persons").select("id, pos_x, pos_y, occupation, culture_id")
+            .eq("world_id", worldId).eq("culture_id", culture.id).eq("is_alive", true).limit(30);
+          const rivalSettlement = await db.from("settlements").select("position_x, position_y").eq("culture_id", rival.id).limit(1).single();
+          if (rivalSettlement.data) {
+            const rx = Number(rivalSettlement.data.position_x);
+            const ry = Number(rivalSettlement.data.position_y);
+            for (const p of (warriors.data ?? [])) {
+              if (/warrior|guard|soldier|scout/i.test(p.occupation ?? "")) {
+                await db.from("persons").update({
+                  pos_x: Math.round(Number(p.pos_x) + (rx - Number(p.pos_x)) * 0.5),
+                  pos_y: Math.round(Number(p.pos_y) + (ry - Number(p.pos_y)) * 0.5),
+                  current_action: `Marching to war against the ${rival.name}`,
+                }).eq("id", p.id);
+              }
+            }
+          }
+        }
       }
     }
+
+    // Update culture metadata with new relations and tensions
+    await db.from("cultures").update({ metadata: { ...meta, relations, tensions } }).eq("id", culture.id);
   }
 
   return events;
@@ -1262,7 +1475,8 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
     ]);
 
     const settlements = (settlementsRes.data ?? []) as DbSettlement[];
-    const cultures = ((culturesRes.data ?? []) as DbCulture[]).map(dbCultureToSimClan);
+    const dbCultures = (culturesRes.data ?? []) as DbCulture[];
+    const cultures = dbCultures.map(dbCultureToSimClan);
 
     // Tick each person
     const allEvents: PendingEvent[] = [];
@@ -1278,8 +1492,8 @@ export async function runSimulationTick(worldSlug = 'first-valley'): Promise<{
       }
     }
 
-    // World-level events
-    const worldEvents = generateWorldEvents(world.id, persons, settlements, newDay, newYear);
+    // World-level events (async — births create real persons, crimes update tensions)
+    const worldEvents = await generateWorldEvents(db, world.id, persons, settlements, dbCultures, newDay, newYear);
     allEvents.push(...worldEvents);
 
     // Clan relations & war simulation
