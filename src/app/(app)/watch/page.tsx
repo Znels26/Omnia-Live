@@ -132,7 +132,7 @@ export default function WatchPage() {
   async function loadWorldState() {
     try {
       const res = await fetch("/api/world", { cache: "no-store" });
-      if (!res.ok) return;
+      if (!res.ok) { setLoading(false); return; }
       const data = await res.json();
       const serverWorld: WorldState = data.world;
       // Capture director arc from server if available and we don't have one yet

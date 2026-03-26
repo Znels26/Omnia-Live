@@ -14,7 +14,8 @@ import type {
 export async function GET() {
   const supabase = createAdminClient()
 
-  const { data: world, error } = await supabase
+  // Try full query first; fall back to minimal columns if any are missing
+  let worldResult = await supabase
     .from('worlds')
     .select(`
       *,
@@ -30,12 +31,35 @@ export async function GET() {
         trait_generosity, trait_honesty, trait_vindictiveness,
         need_hunger, need_stress, need_hope, need_fatigue,
         need_belonging, need_safety,
-        current_action, current_goal,
-        backstory, description, metadata
+        current_action, current_goal, metadata
       )
     `)
     .eq('slug', 'first-valley')
     .single()
+
+  // If extended query fails (missing columns), fall back to minimal safe set
+  if (worldResult.error) {
+    worldResult = await supabase
+      .from('worlds')
+      .select(`
+        *,
+        world_regions(*),
+        cultures(*),
+        settlements(*),
+        persons!persons_world_id_fkey(
+          id, name, age, life_stage, occupation,
+          is_alive, is_featured, health_score, happiness_score,
+          pos_x, pos_y, culture_id,
+          trait_ambition, trait_aggression, trait_sociability,
+          need_hunger, need_stress, need_hope,
+          current_action, current_goal, metadata
+        )
+      `)
+      .eq('slug', 'first-valley')
+      .single()
+  }
+
+  const { data: world, error } = worldResult
 
   if (error || !world) {
     return NextResponse.json({ error: 'World not found' }, { status: 404 })
@@ -131,8 +155,8 @@ export async function GET() {
         beliefs: {},
         trustMap: {},
         relationships: [],
-        description: p.description ?? null,
-        backstory: p.backstory ?? null,
+        description: (meta.description as string | null) ?? null,
+        backstory: (meta.backstory as string | null) ?? null,
       }
     })
 
