@@ -184,7 +184,7 @@ export default async function CharactersPage() {
     .select(`
       *,
       culture:cultures(id, name, color_hex),
-      settlement:settlements(id, name, settlement_type)
+      settlement:settlements!residence_id(id, name, settlement_type)
     `)
     .eq('world_id', world.id)
     .eq('is_alive', true)

@@ -298,6 +298,9 @@ export function WorldViewer({
       drawPaths(ctx, state.settlements, scaleX, scaleY, ambientLight);
     }
 
+    // ── River course (drawn before terrain zones for depth) ───────
+    drawRiverCourse(ctx, scaleX, scaleY, ambientLight, t);
+
     // ── Regions / Terrain ─────────────────────────────────────────
     if (state?.regions) {
       for (const region of state.regions) {
@@ -1018,7 +1021,7 @@ function drawRegion(
   // ── FOREST ───────────────────────────────────────────────────────
   if (region.type === "FOREST") {
     // Dark forest floor
-    ctx.globalAlpha = 0.55;
+    ctx.globalAlpha = 0.70;
     const floorGrad = ctx.createRadialGradient(x, y, 0, x, y, rx);
     floorGrad.addColorStop(0, '#1a3a18');
     floorGrad.addColorStop(1, '#0e2010');
@@ -1105,7 +1108,7 @@ function drawRegion(
   // ── RIVER / WATER ─────────────────────────────────────────────────
   else if (region.type === "RIVER_BASIN" || region.type === "LAKE" || region.type === "MARSH") {
     // Water base
-    ctx.globalAlpha = 0.65;
+    ctx.globalAlpha = 0.75;
     const waterGrad = ctx.createRadialGradient(x, y, 0, x, y, rx);
     waterGrad.addColorStop(0, '#3a8acc');
     waterGrad.addColorStop(0.6, '#2a6aaa');
@@ -1227,7 +1230,7 @@ function drawRegion(
 
   // ── PLAINS / VALLEY / DEFAULT ──────────────────────────────────────
   else {
-    ctx.globalAlpha = 0.45;
+    ctx.globalAlpha = 0.58;
     const lightColor = adjustBrightness(region.color, ambientLight * 0.8 + 0.15);
     const plainGrad = ctx.createRadialGradient(x, y - ry * 0.2, 0, x, y, rx);
     plainGrad.addColorStop(0, lightenColor(region.color, 0.2 * ambientLight));
@@ -2366,6 +2369,115 @@ function drawBirds(
   ctx.restore();
 }
 
+// ── Winding River Course ────────────────────────────────────────────────
+// Draws the main river as a flowing path from the heights (NW) through the valley
+// and down to the coast (SE). This is drawn before terrain zones so regions overlap.
+function drawRiverCourse(
+  ctx: CanvasRenderingContext2D,
+  scaleX: number,
+  scaleY: number,
+  ambientLight: number,
+  t: number
+) {
+  const s = Math.min(scaleX, scaleY);
+
+  // River spine in world space — winds from mountain heights down to coast
+  const SPINE: [number, number][] = [
+    [352, 192], [368, 222], [388, 252], [408, 282],
+    [422, 312], [418, 342], [410, 372], [422, 402],
+    [448, 432], [480, 458], [515, 485],
+  ];
+
+  // Helper: build a smooth bezier path through the spine points
+  function tracePath() {
+    ctx.moveTo(SPINE[0][0] * scaleX, SPINE[0][1] * scaleY);
+    for (let i = 0; i < SPINE.length - 1; i++) {
+      const [ax, ay] = SPINE[i];
+      const [bx, by] = SPINE[i + 1];
+      ctx.quadraticCurveTo(ax * scaleX, ay * scaleY, ((ax + bx) / 2) * scaleX, ((ay + by) / 2) * scaleY);
+    }
+    const [lx, ly] = SPINE[SPINE.length - 1];
+    ctx.lineTo(lx * scaleX, ly * scaleY);
+  }
+
+  // ── Sandy riverbanks ─────────────────────────────────────────────
+  ctx.save();
+  ctx.globalAlpha = 0.40 + ambientLight * 0.12;
+  ctx.strokeStyle = '#a08858';
+  ctx.lineWidth = 28 * s;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  tracePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Pebbly shore inner edge ────────────────────────────────────
+  ctx.save();
+  ctx.globalAlpha = 0.30 + ambientLight * 0.10;
+  ctx.strokeStyle = '#7a6a4a';
+  ctx.lineWidth = 22 * s;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  tracePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Main water channel ────────────────────────────────────────
+  const [sx, sy] = SPINE[0];
+  const [ex, ey] = SPINE[SPINE.length - 1];
+  const waterGrad = ctx.createLinearGradient(sx * scaleX, sy * scaleY, ex * scaleX, ey * scaleY);
+  waterGrad.addColorStop(0.0, '#3a8acd');
+  waterGrad.addColorStop(0.4, '#2a7abf');
+  waterGrad.addColorStop(0.7, '#258aaa');
+  waterGrad.addColorStop(1.0, '#1a6aaa');
+
+  ctx.save();
+  ctx.globalAlpha = 0.72 + ambientLight * 0.08;
+  ctx.strokeStyle = waterGrad;
+  ctx.lineWidth = 14 * s;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  tracePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Specular highlight (top edge of water) ─────────────────────
+  ctx.save();
+  ctx.globalAlpha = 0.18 * ambientLight;
+  ctx.strokeStyle = 'rgba(200,240,255,1)';
+  ctx.lineWidth = 3.5 * s;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  tracePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // ── Animated flow sparkles ────────────────────────────────────
+  ctx.save();
+  for (let i = 0; i < SPINE.length - 1; i++) {
+    const [ax, ay] = SPINE[i];
+    const [bx, by] = SPINE[i + 1];
+    for (let f = 0; f < 2; f++) {
+      const phase = ((t * 0.45 + i * 0.18 + f * 0.5) % 1);
+      const fx = (ax + (bx - ax) * phase) * scaleX;
+      const fy = (ay + (by - ay) * phase) * scaleY;
+      const shimmer = 0.35 + 0.65 * Math.sin(t * 4 + i * 1.3 + f * 2.1);
+      const angle = Math.atan2(by - ay, bx - ax);
+      ctx.globalAlpha = shimmer * 0.45 * ambientLight;
+      ctx.fillStyle = 'rgba(200,240,255,1)';
+      ctx.beginPath();
+      ctx.ellipse(fx, fy, 3.5 * s, 1.5 * s, angle, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
 function drawPaths(
   ctx: CanvasRenderingContext2D,
   settlements: Array<{ x: number; y: number; clanId: string | null }>,
@@ -2389,10 +2501,10 @@ function drawPaths(
       const my = ((a.y + b.y) / 2 + seed * 0.4) * scaleY;
 
       ctx.save();
-      ctx.globalAlpha = 0.11 + 0.07 * ambientLight;
-      ctx.strokeStyle = '#7a5a2a';
-      ctx.lineWidth = 2.2 * s;
-      ctx.setLineDash([5 * scaleX, 8 * scaleX]);
+      ctx.globalAlpha = 0.22 + 0.12 * ambientLight;
+      ctx.strokeStyle = '#9a7a3a';
+      ctx.lineWidth = 3.0 * s;
+      ctx.setLineDash([4 * scaleX, 6 * scaleX]);
       ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(a.x * scaleX, a.y * scaleY);
@@ -2427,11 +2539,20 @@ function drawClanTerritories(
     const maxDist = Math.max(...points.map(p => Math.hypot(p.x - cx, p.y - cy)));
     if (maxDist < 8) continue;
     ctx.save();
-    ctx.globalAlpha = 0.055 + ambientLight * 0.03;
+    ctx.globalAlpha = 0.08 + ambientLight * 0.04;
     ctx.fillStyle = clan.color;
     ctx.beginPath();
     ctx.ellipse(cx, cy, maxDist * 1.3 + 18, maxDist * 0.85 + 12, 0, 0, Math.PI * 2);
     ctx.fill();
+    // Dashed territory border
+    ctx.globalAlpha = 0.22 + ambientLight * 0.08;
+    ctx.strokeStyle = clan.color;
+    ctx.lineWidth = 1.5 * Math.min(scaleX, scaleY);
+    ctx.setLineDash([5 * Math.min(scaleX, scaleY), 9 * Math.min(scaleX, scaleY)]);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, maxDist * 1.3 + 18, maxDist * 0.85 + 12, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
     ctx.restore();
   }
 }

@@ -264,7 +264,7 @@ export async function GET() {
     description: e.description ?? '',
     tick: e.in_game_day ?? 0,
     worldTime: 12,
-    importance: Math.round((e.significance_score ?? 1) * 10),
+    importance: e.significance_score ?? 10,
     highlighted: e.is_featured ?? false,
     clanId: e.culture_id ?? undefined,
     beingId: e.primary_person_id ?? undefined,
