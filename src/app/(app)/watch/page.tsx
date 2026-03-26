@@ -65,29 +65,15 @@ export default function WatchPage() {
 
     // Client clock derived from real time: 1 game day = 12 real hours
     // Always in sync — no drift from setInterval imprecision
+    // NOTE: No position jitter here — the canvas animation loop handles smooth interpolation
     const GAME_DAY_MS = 12 * 60 * 60 * 1000;
     clockRef.current = setInterval(() => {
       clientTimeRef.current = ((Date.now() % GAME_DAY_MS) / GAME_DAY_MS) * 24;
-
       setWorldState(prev => {
         if (!prev) return prev;
-        return {
-          ...prev,
-          worldTime: clientTimeRef.current,
-          // tiny positional jitter so beings look continuously alive
-          beings: prev.beings.map(b => {
-            if (b.status === "DEAD") return b;
-            const jx = (Math.random() - 0.5) * 1.5;
-            const jy = (Math.random() - 0.5) * 1.5;
-            return {
-              ...b,
-              x: Math.max(10, Math.min(790, b.x + jx)),
-              y: Math.max(40, Math.min(520, b.y + jy)),
-            };
-          }),
-        };
+        return { ...prev, worldTime: clientTimeRef.current };
       });
-    }, 200);
+    }, 500);
 
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);

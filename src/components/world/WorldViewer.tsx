@@ -84,10 +84,17 @@ export function WorldViewer({
   const worldStateRef = useRef<WorldState | null>(null);
   const birdsRef = useRef<Bird[]>([]);
   const cloudsRef = useRef<Cloud[]>([]);
-  const posCacheRef = useRef<Map<string, { cx: number; cy: number; tx: number; ty: number }>>(new Map());
+  // cx/cy = current display position, tx/ty = target, dx/dy = movement direction
+  const posCacheRef = useRef<Map<string, { cx: number; cy: number; tx: number; ty: number; dx: number; dy: number }>>(new Map());
   const notesRef = useRef<CanvasNote[]>([]);
   const knownEventIdsRef = useRef<Set<string>>(new Set());
   const speechBubblesRef = useRef<SpeechBubble[]>([]);
+  // Camera follow: position in world coords, zoom multiplier
+  const cameraRef = useRef({ x: 400, y: 280, zoom: 1, targetX: 400, targetY: 280, targetZoom: 1 });
+  // Event ripple animations: expanding rings at event locations
+  const ripplesRef = useRef<Array<{ x: number; y: number; startTime: number; color: string; maxR: number }>>([]);
+  // Storm lightning state
+  const lightningRef = useRef({ boltPoints: [] as Array<[number, number]>, flashAlpha: 0, lastStrike: 0, nextStrike: 4000 + Math.random() * 6000 });
 
   worldStateRef.current = worldState;
 
@@ -259,6 +266,28 @@ export function WorldViewer({
       ctx.globalAlpha = 1;
     }
 
+    // ── Camera follow: lerp toward target position/zoom ───────────
+    const cam = cameraRef.current;
+    // When following a being, track their live position
+    if (selectedBeing && state?.beings) {
+      const followed = state.beings.find(b => b.id === selectedBeing);
+      if (followed) {
+        const pos = posCacheRef.current.get(followed.id);
+        cam.targetX = pos ? pos.cx : followed.x;
+        cam.targetY = pos ? pos.cy : followed.y;
+      }
+    }
+    const lerpSpeed = 0.045;
+    cam.x += (cam.targetX - cam.x) * lerpSpeed;
+    cam.y += (cam.targetY - cam.y) * lerpSpeed;
+    cam.zoom += (cam.targetZoom - cam.zoom) * lerpSpeed;
+
+    // Apply world-space camera transform: pan + zoom around canvas center
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(cam.zoom, cam.zoom);
+    ctx.translate(-cam.x * scaleX, -cam.y * scaleY);
+
     // ── Clan Territories ─────────────────────────────────────────
     if (state?.clans && state?.beings && state?.settlements) {
       drawClanTerritories(ctx, state, scaleX, scaleY, ambientLight);
@@ -316,7 +345,9 @@ export function WorldViewer({
         const pos = cache.get(being.id);
         const drawX = pos ? pos.cx : being.x;
         const drawY = pos ? pos.cy : being.y;
-        drawBeing(ctx, being, clan?.color ?? "#888", scaleX, scaleY, ambientLight, t, isSelected, isHovered, drawX, drawY);
+        // Flip sprite when moving left (dx < -0.3 means sustained leftward motion)
+        const facingLeft = pos ? pos.dx < -0.3 : false;
+        drawBeing(ctx, being, clan?.color ?? "#888", scaleX, scaleY, ambientLight, t, isSelected, isHovered, drawX, drawY, facingLeft);
       }
     }
 
@@ -391,9 +422,87 @@ export function WorldViewer({
     }
     drawCanvasNotes(ctx, notesRef.current, scaleX, scaleY);
 
+    // ── Event Ripples ─────────────────────────────────────────────
+    const nowMs2 = performance.now();
+    ripplesRef.current = ripplesRef.current.filter(r => nowMs2 - r.startTime < 2800);
+    for (const ripple of ripplesRef.current) {
+      const elapsed = nowMs2 - ripple.startTime;
+      const progress = elapsed / 2800;
+      const rx = ripple.x * scaleX;
+      const ry = ripple.y * scaleY;
+      // Three expanding concentric rings
+      for (let ring = 0; ring < 3; ring++) {
+        const ringProgress = Math.max(0, progress - ring * 0.12);
+        if (ringProgress <= 0 || ringProgress >= 1) continue;
+        const r = ringProgress * ripple.maxR * scaleX;
+        const alpha = (1 - ringProgress) * 0.65;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.strokeStyle = ripple.color;
+        ctx.lineWidth = (2.5 - ring * 0.6) * Math.min(scaleX, scaleY);
+        ctx.beginPath();
+        ctx.arc(rx, ry, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // ── Close camera transform ────────────────────────────────────
+    ctx.restore();
+
     // ── Weather Effects ───────────────────────────────────────────
     const weather = state?.weather ?? { type: "clear", intensity: 0.3, temperature: 20, windSpeed: 0.2 };
     drawWeather(ctx, weather, W, H, t, particlesRef, scaleX, scaleY);
+
+    // ── Storm Lightning ───────────────────────────────────────────
+    if (weather.type === 'storm') {
+      const lightning = lightningRef.current;
+      const nowMsL = performance.now();
+      // Trigger a new bolt periodically
+      if (nowMsL - lightning.lastStrike > lightning.nextStrike) {
+        lightning.lastStrike = nowMsL;
+        lightning.nextStrike = 3500 + Math.random() * 7000;
+        lightning.flashAlpha = 0.55;
+        // Generate jagged bolt from sky to ground
+        const boltX = W * (0.15 + Math.random() * 0.7);
+        const pts: Array<[number, number]> = [[boltX, H * 0.05]];
+        let cx2 = boltX, cy2 = H * 0.05;
+        for (let i = 0; i < 8; i++) {
+          cx2 += (Math.random() - 0.5) * W * 0.12;
+          cy2 += H * 0.11;
+          pts.push([cx2, cy2]);
+        }
+        lightning.boltPoints = pts;
+      }
+      // Draw flash overlay
+      if (lightning.flashAlpha > 0.01) {
+        ctx.fillStyle = `rgba(220, 230, 255, ${lightning.flashAlpha})`;
+        ctx.fillRect(0, 0, W, H);
+        lightning.flashAlpha *= 0.78; // decay
+      }
+      // Draw bolt
+      if (lightning.boltPoints.length > 1 && nowMsL - lightning.lastStrike < 200) {
+        const boltAlpha = Math.max(0, 1 - (nowMsL - lightning.lastStrike) / 200);
+        ctx.save();
+        ctx.globalAlpha = boltAlpha;
+        ctx.strokeStyle = 'rgba(200, 220, 255, 1)';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = 'rgba(150, 180, 255, 0.9)';
+        ctx.shadowBlur = 18;
+        ctx.beginPath();
+        ctx.moveTo(lightning.boltPoints[0][0], lightning.boltPoints[0][1]);
+        for (const [bx, by] of lightning.boltPoints.slice(1)) {
+          ctx.lineTo(bx, by);
+        }
+        ctx.stroke();
+        // Bright core
+        ctx.strokeStyle = 'rgba(255, 255, 255, 1)';
+        ctx.lineWidth = 1;
+        ctx.shadowBlur = 6;
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
 
     // ── Day/Night Overlay ──────────────────────────────────────────
     // Only apply for genuine night hours (not dusk/dawn — sky handles those)
@@ -494,13 +603,37 @@ export function WorldViewer({
       if (being.status === 'DEAD') continue;
       const existing = cache.get(being.id);
       if (existing) {
+        // Track movement direction from old target to new target
+        const newDx = being.x - existing.tx;
+        const newDy = being.y - existing.ty;
+        // Smooth direction: blend toward new direction to avoid jitter
+        existing.dx = existing.dx * 0.7 + newDx * 0.3;
+        existing.dy = existing.dy * 0.7 + newDy * 0.3;
         existing.tx = being.x;
         existing.ty = being.y;
       } else {
-        cache.set(being.id, { cx: being.x, cy: being.y, tx: being.x, ty: being.y });
+        cache.set(being.id, { cx: being.x, cy: being.y, tx: being.x, ty: being.y, dx: 0, dy: 0 });
       }
     }
   }, [worldState]);
+
+  // Camera: zoom in when a being is selected, zoom out when deselected
+  useEffect(() => {
+    const cam = cameraRef.current;
+    if (selectedBeing && worldState) {
+      const being = worldState.beings.find(b => b.id === selectedBeing);
+      if (being) {
+        const pos = posCacheRef.current.get(being.id);
+        cam.targetX = pos ? pos.cx : being.x;
+        cam.targetY = pos ? pos.cy : being.y;
+        cam.targetZoom = 2.2;
+      }
+    } else {
+      cam.targetX = 400;
+      cam.targetY = 280;
+      cam.targetZoom = 1;
+    }
+  }, [selectedBeing]);
 
   useEffect(() => {
     const events = worldState?.recentEvents;
@@ -527,6 +660,26 @@ export function WorldViewer({
         opacity: 1,
         color: e.importance >= 70 ? '#c9a050' : 'rgba(200,195,185,0.9)',
       });
+
+      // Spawn ripple effect for important events
+      if (e.importance >= 50) {
+        ripplesRef.current.push({
+          x: nx,
+          y: ny,
+          startTime: performance.now(),
+          color: e.importance >= 75
+            ? 'rgba(212,175,55,0.9)'   // gold for major
+            : e.category === 'MILITARY'
+              ? 'rgba(220,80,60,0.8)'  // red for war/death
+              : e.category === 'SPIRITUAL'
+                ? 'rgba(160,120,220,0.8)' // purple for spiritual
+                : 'rgba(180,220,255,0.7)', // blue-white for social
+          maxR: e.importance >= 75 ? 90 : 60,
+        });
+        if (ripplesRef.current.length > 8) {
+          ripplesRef.current = ripplesRef.current.slice(-8);
+        }
+      }
     }
     // Cap at 4 simultaneous notifications
     if (notesRef.current.length > 4) {
@@ -592,14 +745,23 @@ export function WorldViewer({
       if (!canvas) return;
 
       const rect = canvas.getBoundingClientRect();
-      const canvasX = ((e.clientX - rect.left) / rect.width) * WORLD_WIDTH;
-      const canvasY = ((e.clientY - rect.top) / rect.height) * WORLD_HEIGHT;
+      // Invert camera transform: mouse pos → world coords accounting for zoom/pan
+      const cam = cameraRef.current;
+      const normX = (e.clientX - rect.left) / rect.width - 0.5;
+      const normY = (e.clientY - rect.top) / rect.height - 0.5;
+      const canvasX = normX * WORLD_WIDTH / cam.zoom + cam.x;
+      const canvasY = normY * WORLD_HEIGHT / cam.zoom + cam.y;
 
+      // Use cached display positions for accurate hit detection
+      const cache = posCacheRef.current;
       const found = state.beings.find((b) => {
         if (b.status === "DEAD") return false;
-        const dx = b.x - canvasX;
-        const dy = b.y - canvasY;
-        return Math.sqrt(dx * dx + dy * dy) < 15;
+        const pos = cache.get(b.id);
+        const bx = pos ? pos.cx : b.x;
+        const by = pos ? pos.cy : b.y;
+        const dx = bx - canvasX;
+        const dy = by - canvasY;
+        return Math.sqrt(dx * dx + dy * dy) < 18 / cam.zoom;
       });
 
       setHoveredBeing(found ?? null);
@@ -617,14 +779,22 @@ export function WorldViewer({
       if (!canvas) return;
 
       const rect = canvas.getBoundingClientRect();
-      const canvasX = ((e.clientX - rect.left) / rect.width) * WORLD_WIDTH;
-      const canvasY = ((e.clientY - rect.top) / rect.height) * WORLD_HEIGHT;
+      // Invert camera transform
+      const cam = cameraRef.current;
+      const normX = (e.clientX - rect.left) / rect.width - 0.5;
+      const normY = (e.clientY - rect.top) / rect.height - 0.5;
+      const canvasX = normX * WORLD_WIDTH / cam.zoom + cam.x;
+      const canvasY = normY * WORLD_HEIGHT / cam.zoom + cam.y;
 
+      const cache = posCacheRef.current;
       const found = state.beings.find((b) => {
         if (b.status === "DEAD") return false;
-        const dx = b.x - canvasX;
-        const dy = b.y - canvasY;
-        return Math.sqrt(dx * dx + dy * dy) < 15;
+        const pos = cache.get(b.id);
+        const bx = pos ? pos.cx : b.x;
+        const by = pos ? pos.cy : b.y;
+        const dx = bx - canvasX;
+        const dy = by - canvasY;
+        return Math.sqrt(dx * dx + dy * dy) < 18 / cam.zoom;
       });
 
       if (found) {
@@ -635,7 +805,7 @@ export function WorldViewer({
         const settlement = state.settlements.find((s) => {
           const dx = s.x - canvasX;
           const dy = s.y - canvasY;
-          return Math.sqrt(dx * dx + dy * dy) < 30;
+          return Math.sqrt(dx * dx + dy * dy) < 30 / cam.zoom;
         });
         if (settlement?.clanId) {
           onSelectClan?.(settlement.clanId);
@@ -1451,7 +1621,8 @@ function drawBeing(
   isSelected: boolean,
   isHovered: boolean,
   drawX?: number,
-  drawY?: number
+  drawY?: number,
+  facingLeft: boolean = false
 ) {
   const worldDrawY = drawY ?? being.y;
   const cx = (drawX ?? being.x) * scaleX;
@@ -1527,6 +1698,11 @@ function drawBeing(
 
   ctx.save();
   ctx.globalAlpha = alpha;
+  // Flip entire body horizontally when moving left
+  if (facingLeft) {
+    ctx.translate(cx * 2, 0);
+    ctx.scale(-1, 1);
+  }
 
   // ── Ground shadow (ellipse under feet) ────────────────────────
   ctx.globalAlpha = alpha * 0.28;
@@ -1674,6 +1850,10 @@ function drawBeing(
   ctx.save();
   const propAlpha = Math.min(1, 0.5 + ambientLight * 0.35);
   ctx.globalAlpha = propAlpha;
+  if (facingLeft) {
+    ctx.translate(cx * 2, 0);
+    ctx.scale(-1, 1);
+  }
 
   if (role.includes('hunt') || role.includes('ranger')) {
     ctx.strokeStyle = '#8b5e3c';
